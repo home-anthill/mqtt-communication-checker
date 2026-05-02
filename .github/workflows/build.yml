@@ -1,0 +1,44 @@
+name: Build
+
+on:
+  push:
+    paths-ignore:
+      - '**.md'
+      - '**.MD'
+    branches:
+      - "master"
+      - "develop"
+      - "ft**"
+    # Publish semver tags as releases.
+    tags: [ 'v*.*.*' ]
+  pull_request:
+    branches:
+      - "master"
+      - "develop"
+  # To run the workflow manually from the Actions tab
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+      # This is used to complete the identity challenge
+      # with sigstore/fulcio when running outside of PRs.
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+      - name: Install poetry and packages
+        run: |
+          sudo apt-get update -y
+          echo "installing python and pip"
+          sudo apt-get install -y python3
+          echo "installing poetry"
+          curl -sSL https://install.python-poetry.org | python3 -
+          echo "installing project dependencies"
+          poetry install

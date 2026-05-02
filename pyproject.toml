@@ -1,0 +1,23 @@
+[tool.poetry]
+name = "mqtt-communication-checker"
+version = "1.0.0"
+description = "Local MQTT communication checker"
+authors = ["Stefano Cappa"]
+readme = "README.md"
+packages = [
+    {include = "src"}
+]
+
+[tool.poetry.scripts]
+mqtt-communication-checker = "src.__main__:main"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+paho-mqtt = "^2.1.0"
+pymongo = "^4.11.1"
+redis = "^5.2.1"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

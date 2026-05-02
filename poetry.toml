@@ -1,0 +1,12 @@
+cache-dir = "/tmp/poetry_cache"
+
+[virtualenvs]
+create = true
+in-project = true
+path = ".venv"
+prefer-active-python = false
+prompt = "{project_name}-py{python_version}"
+options.always-copy = false
+options.no-pip = false
+options.no-setuptools = true
+options.system-site-packages = false

@@ -1,0 +1,6 @@
+.idea/
+.DS_Store
+.vscode
+__pycache__
+venv/
+mqtt_communication_checker.egg-info/
