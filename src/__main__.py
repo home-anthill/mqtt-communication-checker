@@ -168,7 +168,7 @@ def run_preflight_checks(mongo_client, redis_client):
     return 0
 
 
-def build_signed_message(api_token, device_uuid, feature_uuid, payload):
+def build_mqtt_signed_message(api_token, device_uuid, feature_uuid, payload):
     timestamp = int(time.time())
     nonce = secrets.token_hex(16)
     payload_json = json.dumps(payload, separators=(",", ":"), sort_keys=False)
@@ -184,7 +184,7 @@ def build_signed_message(api_token, device_uuid, feature_uuid, payload):
     }
 
 
-def build_signed_command(controller, value):
+def build_mqtt_signed_command(controller, value):
     timestamp = int(time.time())
     nonce = secrets.token_hex(16)
     payload = {"value": value}
@@ -322,7 +322,7 @@ def run_sensor_checks(sensors_collection, redis_client):
 
         value = float(expected_value) if feature_name in FLOAT_FEATURES else int(expected_value)
         payload = {"value": value}
-        message = build_signed_message(sensor["apiToken"], sensor["deviceUuid"], sensor["featureUuid"], payload)
+        message = build_mqtt_signed_message(sensor["apiToken"], sensor["deviceUuid"], sensor["featureUuid"], payload)
         topic = f"sensors/{sensor['deviceUuid']}/{feature_name}"
 
         print(f"PUBLISH {topic} value={value}")
@@ -338,7 +338,7 @@ def run_sensor_checks(sensors_collection, redis_client):
             return 1
 
     if online_sensor:
-        online_message = build_signed_message(
+        online_message = build_mqtt_signed_message(
             online_sensor["apiToken"],
             online_sensor["deviceUuid"],
             online_sensor["featureUuid"],
@@ -443,7 +443,7 @@ def run_command_checks(controllers_collection):
                 print(f"FAIL DB {model}/{feature_name}: expected={expected_value}, actual={actual}")
                 continue
 
-            commands.append(build_signed_command(controller, expected_value))
+            commands.append(build_mqtt_signed_command(controller, expected_value))
 
         if commands:
             topic = f"devices/{device_uuid}/values"
