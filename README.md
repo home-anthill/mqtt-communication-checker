@@ -29,6 +29,12 @@ Run:
 poetry run mqtt-communication-checker
 ```
 
+Publish only the existing `online` sensor update:
+
+```bash
+poetry run mqtt-communication-checker --only-update-online
+```
+
 Useful environment overrides:
 
 ```bash
@@ -76,6 +82,8 @@ The script publishes one fixed sensor value for each existing feature:
 For `online`, it publishes the dedicated online status topic and verifies Redis:
 
 - online status topic: `online/{deviceUuid}/features/{featureUuid}`
+
+Use `--only-update-online` to publish only this MQTT message for the existing `online` sensor. This mode skips preflight checks, sensor value publishing, Redis verification, and controller command checks.
 
 If a Mongo verification fails, the script stops immediately. That usually means the MQTT message was accepted by Mosquitto but the producer, RabbitMQ, or consumer hop did not complete.
 

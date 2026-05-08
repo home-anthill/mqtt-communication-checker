@@ -16,6 +16,7 @@ python = "^3.12"
 paho-mqtt = "^2.1.0"
 pymongo = "^4.11.1"
 redis = "^5.2.1"
+cryptography = "^45.0.0"
 
 
 [build-system]

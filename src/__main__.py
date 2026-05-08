@@ -1,3 +1,5 @@
+import argparse
+import base64
 import hashlib
 import hmac
 import json
@@ -12,6 +14,7 @@ from urllib.error import URLError
 from urllib.parse import urlparse
 from urllib.request import urlopen
 
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 import paho.mqtt.publish as publish
 import redis
 from pymongo import MongoClient
@@ -32,6 +35,12 @@ ONLINE_FEATURE_NAME = "online"
 POLL_SECONDS = 20
 POLL_INTERVAL_SECONDS = 1
 SERVICE_CHECK_TIMEOUT_SECONDS = 3
+API_TOKEN_NONCE_SIZE = 12
+API_TOKEN_ENCRYPTION_KEY_MISSING_MESSAGE = """API_TOKEN_ENCRYPTION_KEY is required.
+Rerun the checker with the API server encryption key:
+  API_TOKEN_ENCRYPTION_KEY='KEY_FROM_API_SERVER' poetry run mqtt-communication-checker
+or, for online-only updates:
+  API_TOKEN_ENCRYPTION_KEY='KEY_FROM_API_SERVER' poetry run mqtt-communication-checker --only-update-online"""
 
 COMMAND_FEATURE_VALUES_BY_MODEL = {
     "ac-beko": {
@@ -66,6 +75,47 @@ def env_bool(name, default):
 
 def env_int(name, default):
     return int(os.environ.get(name, str(default)))
+
+
+def decode_base64_with_optional_padding(value, urlsafe):
+    padding = "=" * (-len(value) % 4)
+    decoder = base64.urlsafe_b64decode if urlsafe else base64.b64decode
+    return decoder((value + padding).encode())
+
+
+def api_token_encryption_key():
+    key = os.environ.get("API_TOKEN_ENCRYPTION_KEY", "")
+    if not key:
+        raise RuntimeError(API_TOKEN_ENCRYPTION_KEY_MISSING_MESSAGE)
+
+    for urlsafe in (True, False):
+        try:
+            decoded = decode_base64_with_optional_padding(key, urlsafe)
+        except (ValueError, TypeError):
+            continue
+        if len(decoded) == 32:
+            return decoded
+
+    raw = key.encode()
+    if len(raw) == 32:
+        return raw
+    raise RuntimeError("API_TOKEN_ENCRYPTION_KEY must be 32 raw bytes or base64-encoded 32 bytes")
+
+
+def decrypt_api_token(encrypted):
+    raw = decode_base64_with_optional_padding(encrypted, urlsafe=True)
+    if len(raw) <= API_TOKEN_NONCE_SIZE:
+        raise RuntimeError("encrypted api token is too short")
+    nonce = raw[:API_TOKEN_NONCE_SIZE]
+    ciphertext = raw[API_TOKEN_NONCE_SIZE:]
+    return AESGCM(api_token_encryption_key()).decrypt(nonce, ciphertext, None).decode()
+
+
+def document_api_token(document, document_name):
+    encrypted = document.get("apiTokenEncrypted")
+    if not encrypted:
+        raise RuntimeError(f"{document_name} document is missing apiTokenEncrypted")
+    return decrypt_api_token(encrypted)
 
 
 def parse_host_port_from_uri(uri, default_host, default_port):
@@ -201,7 +251,7 @@ def build_mqtt_signed_command(controller, value):
             payload_json,
         ]
     )
-    signature = hmac.new(controller["apiToken"].encode(), signed_payload.encode(), hashlib.sha256).hexdigest()
+    signature = hmac.new(document_api_token(controller, "controller").encode(), signed_payload.encode(), hashlib.sha256).hexdigest()
     return {
         "deviceUuid": controller["deviceUuid"],
         "mac": controller["mac"],
@@ -263,11 +313,7 @@ def wait_for_mongo_value(collection, sensor, expected_value):
 
 def wait_for_controller_value(collection, controller, expected_value):
     query = {
-        "apiToken": controller["apiToken"],
-        "deviceUuid": controller["deviceUuid"],
-        "mac": controller["mac"],
-        "featureUuid": controller["featureUuid"],
-        "featureName": controller["featureName"],
+        "_id": controller["_id"],
     }
     deadline = time.time() + POLL_SECONDS
     while time.time() < deadline:
@@ -306,6 +352,30 @@ def get_first_sensor_per_feature(collection, feature_names):
     return sensors
 
 
+def publish_online_update(online_sensor):
+    online_message = build_mqtt_signed_message(
+        document_api_token(online_sensor, "online sensor"),
+        online_sensor["deviceUuid"],
+        online_sensor["featureUuid"],
+        {},
+    )
+    online_topic = f"online/{online_sensor['deviceUuid']}/features/{online_sensor['featureUuid']}"
+    print(f"PUBLISH {online_topic}")
+    publish_mqtt(online_topic, online_message)
+    return online_topic
+
+
+def run_only_update_online(sensors_collection):
+    online_sensor = sensors_collection.find_one({"featureName": ONLINE_FEATURE_NAME})
+    if not online_sensor:
+        print("FAIL online: no existing online sensor document found")
+        return 1
+
+    publish_online_update(online_sensor)
+    print("Online update published successfully.")
+    return 0
+
+
 def run_sensor_checks(sensors_collection, redis_client):
     sensors = get_first_sensor_per_feature(sensors_collection, SENSOR_FEATURE_VALUES)
     online_sensor = sensors_collection.find_one({"featureName": ONLINE_FEATURE_NAME})
@@ -322,7 +392,12 @@ def run_sensor_checks(sensors_collection, redis_client):
 
         value = float(expected_value) if feature_name in FLOAT_FEATURES else int(expected_value)
         payload = {"value": value}
-        message = build_mqtt_signed_message(sensor["apiToken"], sensor["deviceUuid"], sensor["featureUuid"], payload)
+        message = build_mqtt_signed_message(
+            document_api_token(sensor, "sensor"),
+            sensor["deviceUuid"],
+            sensor["featureUuid"],
+            payload,
+        )
         topic = f"sensors/{sensor['deviceUuid']}/{feature_name}"
 
         print(f"PUBLISH {topic} value={value}")
@@ -338,15 +413,7 @@ def run_sensor_checks(sensors_collection, redis_client):
             return 1
 
     if online_sensor:
-        online_message = build_mqtt_signed_message(
-            online_sensor["apiToken"],
-            online_sensor["deviceUuid"],
-            online_sensor["featureUuid"],
-            {},
-        )
-        online_topic = f"online/{online_sensor['deviceUuid']}/features/{online_sensor['featureUuid']}"
-        print(f"PUBLISH {online_topic}")
-        publish_mqtt(online_topic, online_message)
+        publish_online_update(online_sensor)
 
         ok, key = wait_for_redis_online(redis_client, online_sensor)
         if ok:
@@ -370,7 +437,7 @@ def get_controller_devices(collection):
         collection.find(
             {"model": {"$in": list(COMMAND_FEATURE_VALUES_BY_MODEL.keys())}},
             {
-                "apiToken": 1,
+                "apiTokenEncrypted": 1,
                 "deviceUuid": 1,
                 "mac": 1,
                 "model": 1,
@@ -391,11 +458,7 @@ def set_controller_db_value(collection, controller, expected_value):
     now = datetime.now(timezone.utc)
     result = collection.update_one(
         {
-            "apiToken": controller["apiToken"],
-            "deviceUuid": controller["deviceUuid"],
-            "mac": controller["mac"],
-            "featureUuid": controller["featureUuid"],
-            "featureName": controller["featureName"],
+            "_id": controller["_id"],
         },
         {
             "$set": {
@@ -458,21 +521,40 @@ def run_command_checks(controllers_collection):
     return 0
 
 
-def main():
-    mongo = MongoClient(env("MONGO_URI", "mongodb://localhost:27017"), serverSelectionTimeoutMS=3000)
-    sensors_collection = mongo[env("MONGO_DB", "sensors")]["sensors"]
-    controllers_collection = mongo[env("CONTROLLERS_MONGO_DB", "controllers")][
-        env("CONTROLLERS_COLLECTION", "controllers")
-    ]
-    redis_client = redis.Redis.from_url(env("REDIS_URL", "redis://localhost:6379"))
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--only-update-online",
+        action="store_true",
+        help="Only publish the existing online sensor MQTT update, skipping all checks and other messages.",
+    )
+    return parser.parse_args(argv)
 
-    preflight_result = run_preflight_checks(mongo, redis_client)
-    if preflight_result:
-        return preflight_result
 
-    sensor_result = run_sensor_checks(sensors_collection, redis_client)
-    command_result = run_command_checks(controllers_collection)
-    return 1 if sensor_result or command_result else 0
+def main(argv=None):
+    try:
+        args = parse_args(argv)
+        mongo = MongoClient(env("MONGO_URI", "mongodb://localhost:27017"), serverSelectionTimeoutMS=3000)
+        sensors_collection = mongo[env("MONGO_DB", "sensors")]["sensors"]
+        controllers_collection = mongo[env("CONTROLLERS_MONGO_DB", "controllers")][
+            env("CONTROLLERS_COLLECTION", "controllers")
+        ]
+
+        if args.only_update_online:
+            return run_only_update_online(sensors_collection)
+
+        redis_client = redis.Redis.from_url(env("REDIS_URL", "redis://localhost:6379"))
+
+        preflight_result = run_preflight_checks(mongo, redis_client)
+        if preflight_result:
+            return preflight_result
+
+        sensor_result = run_sensor_checks(sensors_collection, redis_client)
+        command_result = run_command_checks(controllers_collection)
+        return 1 if sensor_result or command_result else 0
+    except RuntimeError as err:
+        print(f"ERROR: {err}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
