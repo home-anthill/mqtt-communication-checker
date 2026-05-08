@@ -26,13 +26,13 @@ poetry install
 Run:
 
 ```bash
-poetry run mqtt-communication-checker
+API_TOKEN_ENCRYPTION_KEY='<FROM_API_SERVER_ENV_VAR>' poetry run mqtt-communication-checker
 ```
 
 Publish only the existing `online` sensor update:
 
 ```bash
-poetry run mqtt-communication-checker --only-update-online
+API_TOKEN_ENCRYPTION_KEY='<FROM_API_SERVER_ENV_VAR>' poetry run mqtt-communication-checker --only-update-online
 ```
 
 Useful environment overrides:
