@@ -17,6 +17,8 @@ paho-mqtt = "^2.1.0"
 pymongo = "^4.11.1"
 redis = "^5.2.1"
 cryptography = "^45.0.0"
+pydantic = "^2.11.7"
+questionary = "^2.1.0"
 
 
 [build-system]

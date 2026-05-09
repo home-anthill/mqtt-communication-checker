@@ -1,8 +1,8 @@
 # mqtt-communication-checker
 
-Local dev helper to publish signed MQTT messages for existing sensors and verify that the local stores were updated.
+Local dev helper to publish signed MQTT messages for existing device features and verify that the local stores were updated.
 
-It does not create sensors. It reads existing documents from MongoDB database `sensors`, collection `sensors`.
+It does not create profiles, devices, sensors, or controllers. It reads profiles and device ownership from MongoDB database `api-server`, then joins selected device features to the MQTT-facing `sensors.sensors` and `controllers.controllers` documents.
 
 ## Requirements
 
@@ -29,11 +29,14 @@ Run:
 API_TOKEN_ENCRYPTION_KEY='<FROM_API_SERVER_ENV_VAR>' poetry run mqtt-communication-checker
 ```
 
-Publish only the existing `online` sensor update:
+The CLI is interactive:
 
-```bash
-API_TOKEN_ENCRYPTION_KEY='<FROM_API_SERVER_ENV_VAR>' poetry run mqtt-communication-checker --only-update-online
-```
+1. It fails immediately if `API_TOKEN_ENCRYPTION_KEY` is missing or invalid.
+2. It asks which profile to use. Profiles are listed with GitHub email, name/login, owned-device count, and profile id.
+3. It asks which device features to update. Device rows are group headings; check individual features with `Space`, move with `Up`/`Down`, and continue with `Enter`.
+4. It generates a valid random value for each selected feature and publishes commands one by one in the displayed order.
+
+Feature rows include the feature UUID next to the feature name.
 
 Useful environment overrides:
 
@@ -43,6 +46,9 @@ MQTT_PORT=1883
 MQTT_USERNAME=device_pubsub
 MQTT_PASSWORD='DevicePassword1!'
 MONGO_URI='mongodb://localhost:27017'
+API_SERVER_MONGO_DB=api-server
+PROFILES_COLLECTION=profiles
+API_DEVICES_COLLECTION=devices
 MONGO_DB=sensors
 CONTROLLERS_MONGO_DB=controllers
 CONTROLLERS_COLLECTION=controllers
@@ -68,37 +74,33 @@ Before publishing messages, the script checks that the local stack is up:
 - `consumer`: process-name check using `CONSUMER_PROCESS_PATTERN`, or `CONSUMER_HEALTH_URL` if set
 - `online-receiver`: HTTP check using `ONLINE_RECEIVER_HEALTH_URL`
 
-Set `REQUIRE_PREFLIGHT=false` to print preflight failures but continue with the MQTT checks.
+Set `REQUIRE_PREFLIGHT=false` to print preflight failures but continue to the interactive prompts.
 
-The script publishes one fixed sensor value for each existing feature:
+The script generates random valid values for selected sensor features:
 
-- `temperature`: `21.5`
-- `humidity`: `55.5`
-- `light`: `123.4`
-- `airpressure`: `1013.25`
-- `motion`: `1`
-- `airquality`: `2`
+- `temperature`: float in a realistic Celsius range with up to four decimals
+- `humidity`: float percentage from `0` to `100` with one decimal
+- `light`: decimal lux value from `0` to `1000` with one decimal
+- `airpressure`: float hPa value with up to four decimals
+- `motion`: `0` or `1`
+- `airquality`: integer enum value from `0` to `4`
 
 For `online`, it publishes the dedicated online status topic and verifies Redis:
 
 - online status topic: `online/{deviceUuid}/features/{featureUuid}`
 
-Use `--only-update-online` to publish only this MQTT message for the existing `online` sensor. This mode skips preflight checks, sensor value publishing, Redis verification, and controller command checks.
+To publish only the online/power-outage update, select only the `online` feature in the interactive feature list.
 
 If a Mongo verification fails, the script stops immediately. That usually means the MQTT message was accepted by Mosquitto but the producer, RabbitMQ, or consumer hop did not complete.
 
-The script also checks controller commands for registered AC and thermostat devices. It reads existing documents from MongoDB database `controllers`, collection `controllers`, sets each command value in DB, verifies `status.value`, and publishes the signed MQTT command array to:
+The script also sends controller commands for selected controller features. It reads existing documents from MongoDB database `controllers`, collection `controllers`, sets each command value in DB, verifies `status.value`, and publishes a signed MQTT command array with one command at a time to:
 
 - command topic: `devices/{deviceUuid}/values`
 
-Command values used for AC devices (`ac-beko`, `ac-lg`):
+Generated command values include:
 
-- `on`: `1`
-- `setpoint`: `27`
-- `mode`: `1`
-- `fanSpeed`: `1`
-
-Command values used for thermostat devices:
-
-- `setpoint`: `22.4`
-- `tolerance`: `2`
+- `on`: `0` or `1`
+- `setpoint`: random temperature setpoint
+- `mode`: random integer enum
+- `fanSpeed`: random integer enum
+- `tolerance`: random thermostat tolerance

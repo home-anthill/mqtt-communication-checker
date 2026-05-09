@@ -4,33 +4,28 @@ import hashlib
 import hmac
 import json
 import os
+import random
 import secrets
 import socket
 import subprocess
 import sys
 import time
 from datetime import datetime, timezone
+from typing import Any
 from urllib.error import URLError
 from urllib.parse import urlparse
 from urllib.request import urlopen
 
+from bson import ObjectId
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 import paho.mqtt.publish as publish
+from pydantic import BaseModel, ConfigDict, Field
+import questionary
 import redis
 from pymongo import MongoClient
 from pymongo.errors import PyMongoError
 
 
-SENSOR_FEATURE_VALUES = {
-    "temperature": 21.5,
-    "humidity": 55.5,
-    "light": 123.4,
-    "airpressure": 1013.25,
-    "motion": 1,
-    "airquality": 2,
-}
-
-FLOAT_FEATURES = {"temperature", "humidity", "light", "airpressure"}
 ONLINE_FEATURE_NAME = "online"
 POLL_SECONDS = 20
 POLL_INTERVAL_SECONDS = 1
@@ -38,28 +33,82 @@ SERVICE_CHECK_TIMEOUT_SECONDS = 3
 API_TOKEN_NONCE_SIZE = 12
 API_TOKEN_ENCRYPTION_KEY_MISSING_MESSAGE = """API_TOKEN_ENCRYPTION_KEY is required.
 Rerun the checker with the API server encryption key:
-  API_TOKEN_ENCRYPTION_KEY='KEY_FROM_API_SERVER' poetry run mqtt-communication-checker
-or, for online-only updates:
-  API_TOKEN_ENCRYPTION_KEY='KEY_FROM_API_SERVER' poetry run mqtt-communication-checker --only-update-online"""
+  API_TOKEN_ENCRYPTION_KEY='KEY_FROM_API_SERVER' poetry run mqtt-communication-checker"""
 
-COMMAND_FEATURE_VALUES_BY_MODEL = {
-    "ac-beko": {
-        "on": 1,
-        "setpoint": 27,
-        "mode": 1,
-        "fanSpeed": 1,
-    },
-    "ac-lg": {
-        "on": 1,
-        "setpoint": 27,
-        "mode": 1,
-        "fanSpeed": 1,
-    },
-    "thermostat": {
-        "setpoint": 22.4,
-        "tolerance": 2,
-    },
+SENSOR_RANDOM_RANGES = {
+    "temperature": (18.0, 30.0, 4),
+    "humidity": (0.0, 100.0, 1),
+    "light": (0.0, 1000.0, 1),
+    "airpressure": (980.0, 1040.0, 4),
 }
+
+INT_FEATURE_RANDOM_VALUES = {
+    "motion": [0, 1],
+    "airquality": [0, 1, 2, 3, 4],
+    "online": [None],
+    "on": [0, 1],
+    "setpoint": list(range(17, 31)),
+    "mode": list(range(0, 5)),
+    "fanSpeed": list(range(0, 6)),
+    "tolerance": list(range(0, 11)),
+}
+
+SUPPORTED_SENSOR_FEATURES = {
+    "temperature",
+    "humidity",
+    "light",
+    "motion",
+    "airpressure",
+    "airquality",
+    ONLINE_FEATURE_NAME,
+}
+
+SUPPORTED_CONTROLLER_FEATURES = {
+    "on",
+    "setpoint",
+    "mode",
+    "fanSpeed",
+    "tolerance",
+}
+
+FEATURE_TYPE_COLORS = {
+    "sensor": "fg:ansigreen",
+    "controller": "fg:ansiblue",
+    "online": "fg:ansimagenta",
+}
+
+
+class ProfileChoice(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    id: ObjectId
+    email: str
+    name: str
+    login: str
+    devices: list[ObjectId] = Field(default_factory=list)
+    label: str
+
+
+class DeviceFeatureChoice(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    profile_id: ObjectId
+    device_id: ObjectId
+    device_uuid: str
+    device_name: str
+    mac: str
+    model: str
+    manufacturer: str
+    feature_uuid: str
+    feature_name: str
+    feature_type: str
+    feature_unit: str = ""
+    backing_document: dict[str, Any]
+
+
+class PlannedFeatureValue(BaseModel):
+    selection: DeviceFeatureChoice
+    value: Any
 
 
 def env(name, default):
@@ -343,13 +392,201 @@ def wait_for_redis_online(redis_client, sensor):
     return False, key
 
 
-def get_first_sensor_per_feature(collection, feature_names):
-    sensors = {}
-    for feature_name in feature_names:
-        sensor = collection.find_one({"featureName": feature_name})
-        if sensor:
-            sensors[feature_name] = sensor
-    return sensors
+def format_profile_label(document, owned_device_count):
+    github = document.get("github") or {}
+    email = github.get("email") or "no-email"
+    name = github.get("name") or ""
+    login = github.get("login") or ""
+    identity = name or login or "unnamed"
+    profile_id = document.get("_id")
+    return f"{email} | {identity} | devices={owned_device_count} | id={profile_id}"
+
+
+def list_profiles(profiles_collection):
+    docs = list(
+        profiles_collection.find(
+            {},
+            {
+                "github.email": 1,
+                "github.name": 1,
+                "github.login": 1,
+                "devices": 1,
+            },
+        ).sort("github.email", 1)
+    )
+    profiles = []
+    for doc in docs:
+        github = doc.get("github") or {}
+        devices = doc.get("devices") or []
+        profiles.append(
+            ProfileChoice(
+                id=doc["_id"],
+                email=github.get("email") or "no-email",
+                name=github.get("name") or "",
+                login=github.get("login") or "",
+                devices=devices,
+                label=format_profile_label(doc, len(devices)),
+            )
+        )
+    return profiles
+
+
+def choose_profile(profiles_collection):
+    profiles = list_profiles(profiles_collection)
+    if not profiles:
+        print("No profiles found in API server MongoDB.")
+        return None
+
+    return questionary.select(
+        "Select one profile",
+        choices=[questionary.Choice(title=profile.label, value=profile) for profile in profiles],
+    ).ask()
+
+
+def device_label(device):
+    parts = [
+        device.get("name") or "unnamed device",
+        f"model={device.get('model') or '-'}",
+        f"uuid={device.get('uuid') or '-'}",
+        f"mac={device.get('mac') or '-'}",
+    ]
+    return " | ".join(parts)
+
+
+def find_feature_document(sensors_collection, controllers_collection, profile, device, feature):
+    query = {
+        "profileOwnerId": profile.id,
+        "deviceUuid": device.get("uuid"),
+        "featureUuid": feature.get("uuid"),
+        "featureName": feature.get("name"),
+    }
+    if feature.get("type") == "sensor":
+        return sensors_collection.find_one(query)
+    if feature.get("type") == "controller":
+        return controllers_collection.find_one(query)
+    return None
+
+
+def is_supported_feature(feature):
+    feature_name = feature.get("name") or ""
+    feature_type = feature.get("type") or ""
+    if feature_type == "sensor":
+        return feature_name in SUPPORTED_SENSOR_FEATURES
+    if feature_type == "controller":
+        return feature_name in SUPPORTED_CONTROLLER_FEATURES
+    return False
+
+
+def feature_choice_title(feature):
+    feature_name = feature.get("name") or ""
+    feature_type = feature.get("type") or ""
+    feature_unit = feature.get("unit") or "-"
+    feature_uuid = feature.get("uuid") or "-"
+    color_key = ONLINE_FEATURE_NAME if feature_name == ONLINE_FEATURE_NAME else feature_type
+    color = FEATURE_TYPE_COLORS.get(color_key, "class:text")
+
+    return [
+        ("", "  "),
+        (color, feature_name),
+        ("", " | "),
+        (color, feature_type),
+        ("", f" | {feature_unit} | {feature_uuid}"),
+    ]
+
+
+def build_feature_choices(api_devices_collection, sensors_collection, controllers_collection, profile):
+    if not profile.devices:
+        return []
+
+    devices = list(api_devices_collection.find({"_id": {"$in": profile.devices}}).sort("name", 1))
+    choices = []
+    for device in devices:
+        choices.append(questionary.Separator(f"Device: {device_label(device)}"))
+        features = sorted(device.get("features") or [], key=lambda item: item.get("order", 0))
+        for feature in features:
+            title = feature_choice_title(feature)
+            if not feature.get("enable", False):
+                choices.append(questionary.Choice(title=title, value=None, disabled="disabled feature"))
+                continue
+            if not is_supported_feature(feature):
+                choices.append(questionary.Choice(title=title, value=None, disabled="unsupported feature"))
+                continue
+
+            backing_document = find_feature_document(sensors_collection, controllers_collection, profile, device, feature)
+            if not backing_document:
+                choices.append(questionary.Choice(title=title, value=None, disabled="missing MQTT document"))
+                continue
+
+            choices.append(
+                questionary.Choice(
+                    title=title,
+                    value=DeviceFeatureChoice(
+                        profile_id=profile.id,
+                        device_id=device["_id"],
+                        device_uuid=device.get("uuid") or "",
+                        device_name=device.get("name") or "",
+                        mac=device.get("mac") or "",
+                        model=device.get("model") or "",
+                        manufacturer=device.get("manufacturer") or "",
+                        feature_uuid=feature.get("uuid") or "",
+                        feature_name=feature.get("name") or "",
+                        feature_type=feature.get("type") or "",
+                        feature_unit=feature.get("unit") or "",
+                        backing_document=backing_document,
+                    ),
+                )
+            )
+    return choices
+
+
+def choose_features(api_devices_collection, sensors_collection, controllers_collection, profile):
+    choices = build_feature_choices(api_devices_collection, sensors_collection, controllers_collection, profile)
+    if not choices:
+        print("No devices found for the selected profile.")
+        return []
+    if not any(choice.value is not None and not choice.disabled for choice in choices):
+        print("No selectable features found for the selected profile. Check sensor/controller registration documents.")
+        return []
+
+    selected = questionary.checkbox(
+        "Select features to update",
+        choices=choices,
+        validate=lambda values: True if values else "Select at least one feature.",
+    ).ask()
+    return selected or []
+
+
+def generate_random_feature_value(selection):
+    feature_name = selection.feature_name
+    if feature_name in SENSOR_RANDOM_RANGES:
+        minimum, maximum, digits = SENSOR_RANDOM_RANGES[feature_name]
+        return round(random.uniform(minimum, maximum), digits)
+    if feature_name in INT_FEATURE_RANDOM_VALUES:
+        values = INT_FEATURE_RANDOM_VALUES[feature_name]
+        return random.choice(values)
+    raise RuntimeError(f"unsupported feature value rule: {selection.feature_type}/{feature_name}")
+
+
+def planned_value_text(value):
+    return "online heartbeat" if value is None else str(value)
+
+
+def plan_selected_feature_values(selections):
+    return [
+        PlannedFeatureValue(selection=selection, value=generate_random_feature_value(selection))
+        for selection in selections
+    ]
+
+
+def print_planned_feature_values(planned_values):
+    print("Values to send:")
+    for index, planned in enumerate(planned_values, start=1):
+        selection = planned.selection
+        print(
+            f"[{index}/{len(planned_values)}] {selection.device_name or selection.device_uuid} | "
+            f"{selection.feature_name} | {selection.feature_type} | {selection.feature_unit or '-'} | "
+            f"{selection.feature_uuid} | value={planned_value_text(planned.value)}"
+        )
 
 
 def publish_online_update(online_sensor):
@@ -363,95 +600,6 @@ def publish_online_update(online_sensor):
     print(f"PUBLISH {online_topic}")
     publish_mqtt(online_topic, online_message)
     return online_topic
-
-
-def run_only_update_online(sensors_collection):
-    online_sensor = sensors_collection.find_one({"featureName": ONLINE_FEATURE_NAME})
-    if not online_sensor:
-        print("FAIL online: no existing online sensor document found")
-        return 1
-
-    publish_online_update(online_sensor)
-    print("Online update published successfully.")
-    return 0
-
-
-def run_sensor_checks(sensors_collection, redis_client):
-    sensors = get_first_sensor_per_feature(sensors_collection, SENSOR_FEATURE_VALUES)
-    online_sensor = sensors_collection.find_one({"featureName": ONLINE_FEATURE_NAME})
-    if not sensors and not online_sensor:
-        print("No existing sensors found. Register devices first, then rerun this script.")
-        return 1
-
-    failures = 0
-    for feature_name, expected_value in SENSOR_FEATURE_VALUES.items():
-        sensor = sensors.get(feature_name)
-        if not sensor:
-            print(f"SKIP {feature_name}: no existing sensor document found")
-            continue
-
-        value = float(expected_value) if feature_name in FLOAT_FEATURES else int(expected_value)
-        payload = {"value": value}
-        message = build_mqtt_signed_message(
-            document_api_token(sensor, "sensor"),
-            sensor["deviceUuid"],
-            sensor["featureUuid"],
-            payload,
-        )
-        topic = f"sensors/{sensor['deviceUuid']}/{feature_name}"
-
-        print(f"PUBLISH {topic} value={value}")
-        publish_mqtt(topic, message)
-
-        ok, actual = wait_for_mongo_value(sensors_collection, sensor, value)
-        if ok:
-            print(f"OK Mongo {feature_name}: value={actual}")
-        else:
-            failures += 1
-            print(f"FAIL Mongo {feature_name}: expected={value}, actual={actual}")
-            print("Stopping after first Mongo verification failure. Check producer, RabbitMQ, and consumer logs.")
-            return 1
-
-    if online_sensor:
-        publish_online_update(online_sensor)
-
-        ok, key = wait_for_redis_online(redis_client, online_sensor)
-        if ok:
-            print(f"OK Redis online: key={key}")
-        else:
-            failures += 1
-            print(f"FAIL Redis online: key={key} was not updated")
-    else:
-        print("SKIP online: no existing online sensor document found")
-
-    if failures:
-        print(f"Completed with {failures} failure(s).")
-        return 1
-
-    print("Completed successfully.")
-    return 0
-
-
-def get_controller_devices(collection):
-    docs = list(
-        collection.find(
-            {"model": {"$in": list(COMMAND_FEATURE_VALUES_BY_MODEL.keys())}},
-            {
-                "apiTokenEncrypted": 1,
-                "deviceUuid": 1,
-                "mac": 1,
-                "model": 1,
-                "featureUuid": 1,
-                "featureName": 1,
-                "status": 1,
-            },
-        )
-    )
-    devices = {}
-    for doc in docs:
-        key = (doc["deviceUuid"], doc["mac"], doc["model"])
-        devices.setdefault(key, {})[doc["featureName"]] = doc
-    return devices
 
 
 def set_controller_db_value(collection, controller, expected_value):
@@ -474,74 +622,98 @@ def set_controller_db_value(collection, controller, expected_value):
     return result.matched_count == 1
 
 
-def run_command_checks(controllers_collection):
-    devices = get_controller_devices(controllers_collection)
-    if not devices:
-        print("No existing AC or thermostat controller documents found. Register devices first, then rerun this script.")
-        return 0
-
-    failures = 0
-    for (device_uuid, mac, model), features in devices.items():
-        expected_features = COMMAND_FEATURE_VALUES_BY_MODEL[model]
-        print(f"COMMAND DEVICE {model} deviceUuid={device_uuid} mac={mac}")
-
-        commands = []
-        for feature_name, expected_value in expected_features.items():
-            controller = features.get(feature_name)
-            if not controller:
-                failures += 1
-                print(f"FAIL Command {model}/{feature_name}: no registered controller document found")
-                continue
-
-            if not set_controller_db_value(controllers_collection, controller, expected_value):
-                failures += 1
-                print(f"FAIL DB set {model}/{feature_name}: controller document was not updated")
-                continue
-
-            ok, actual = wait_for_controller_value(controllers_collection, controller, expected_value)
-            if ok:
-                print(f"OK DB {model}/{feature_name}: value={actual}")
-            else:
-                failures += 1
-                print(f"FAIL DB {model}/{feature_name}: expected={expected_value}, actual={actual}")
-                continue
-
-            commands.append(build_mqtt_signed_command(controller, expected_value))
-
-        if commands:
-            topic = f"devices/{device_uuid}/values"
-            print(f"PUBLISH {topic} commands={len(commands)}")
-            publish_mqtt_json(topic, commands)
-
-    if failures:
-        print(f"Command checks completed with {failures} failure(s).")
+def run_selected_sensor(sensors_collection, redis_client, selection, value):
+    sensor = selection.backing_document
+    if selection.feature_name == ONLINE_FEATURE_NAME:
+        publish_online_update(sensor)
+        ok, key = wait_for_redis_online(redis_client, sensor)
+        if ok:
+            print(f"OK Redis online: key={key}")
+            return 0
+        print(f"FAIL Redis online: key={key} was not updated")
         return 1
 
-    print("Command checks completed successfully.")
+    payload = {"value": value}
+    message = build_mqtt_signed_message(
+        document_api_token(sensor, "sensor"),
+        sensor["deviceUuid"],
+        sensor["featureUuid"],
+        payload,
+    )
+    topic = f"sensors/{sensor['deviceUuid']}/{sensor['featureName']}"
+
+    print(f"PUBLISH {topic} featureUuid={sensor['featureUuid']} value={value}")
+    publish_mqtt(topic, message)
+
+    ok, actual = wait_for_mongo_value(sensors_collection, sensor, value)
+    if ok:
+        print(f"OK Mongo {selection.feature_name}: value={actual}")
+        return 0
+    print(f"FAIL Mongo {selection.feature_name}: expected={value}, actual={actual}")
+    return 1
+
+
+def run_selected_controller(controllers_collection, selection, value):
+    controller = selection.backing_document
+    if not set_controller_db_value(controllers_collection, controller, value):
+        print(f"FAIL DB set {selection.model}/{selection.feature_name}: controller document was not updated")
+        return 1
+
+    ok, actual = wait_for_controller_value(controllers_collection, controller, value)
+    if ok:
+        print(f"OK DB {selection.model}/{selection.feature_name}: value={actual}")
+    else:
+        print(f"FAIL DB {selection.model}/{selection.feature_name}: expected={value}, actual={actual}")
+        return 1
+
+    topic = f"devices/{controller['deviceUuid']}/values"
+    print(f"PUBLISH {topic} featureUuid={controller['featureUuid']} featureName={controller['featureName']} value={value}")
+    publish_mqtt_json(topic, [build_mqtt_signed_command(controller, value)])
+    return 0
+
+
+def run_planned_feature_values(sensors_collection, controllers_collection, redis_client, planned_values):
+    failures = 0
+    for index, planned in enumerate(planned_values, start=1):
+        selection = planned.selection
+        value = planned.value
+        print(
+            f"[{index}/{len(planned_values)}] Sending {selection.device_name or selection.device_uuid} "
+            f"{selection.feature_name} ({selection.feature_uuid}) value={planned_value_text(value)}"
+        )
+        if selection.feature_type == "sensor":
+            failures += run_selected_sensor(sensors_collection, redis_client, selection, value)
+        elif selection.feature_type == "controller":
+            failures += run_selected_controller(controllers_collection, selection, value)
+        else:
+            failures += 1
+            print(f"FAIL unsupported feature type: {selection.feature_type}")
+
+    if failures:
+        print(f"Completed with {failures} failure(s).")
+        return 1
+    print("Completed successfully.")
     return 0
 
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--only-update-online",
-        action="store_true",
-        help="Only publish the existing online sensor MQTT update, skipping all checks and other messages.",
-    )
     return parser.parse_args(argv)
 
 
 def main(argv=None):
     try:
-        args = parse_args(argv)
+        parse_args(argv)
+        api_token_encryption_key()
+
         mongo = MongoClient(env("MONGO_URI", "mongodb://localhost:27017"), serverSelectionTimeoutMS=3000)
+        api_server_db = mongo[env("API_SERVER_MONGO_DB", "api-server")]
+        profiles_collection = api_server_db[env("PROFILES_COLLECTION", "profiles")]
+        api_devices_collection = api_server_db[env("API_DEVICES_COLLECTION", "devices")]
         sensors_collection = mongo[env("MONGO_DB", "sensors")]["sensors"]
         controllers_collection = mongo[env("CONTROLLERS_MONGO_DB", "controllers")][
             env("CONTROLLERS_COLLECTION", "controllers")
         ]
-
-        if args.only_update_online:
-            return run_only_update_online(sensors_collection)
 
         redis_client = redis.Redis.from_url(env("REDIS_URL", "redis://localhost:6379"))
 
@@ -549,9 +721,18 @@ def main(argv=None):
         if preflight_result:
             return preflight_result
 
-        sensor_result = run_sensor_checks(sensors_collection, redis_client)
-        command_result = run_command_checks(controllers_collection)
-        return 1 if sensor_result or command_result else 0
+        profile = choose_profile(profiles_collection)
+        if profile is None:
+            return 1
+
+        selections = choose_features(api_devices_collection, sensors_collection, controllers_collection, profile)
+        if not selections:
+            return 1
+
+        planned_values = plan_selected_feature_values(selections)
+        print_planned_feature_values(planned_values)
+
+        return run_planned_feature_values(sensors_collection, controllers_collection, redis_client, planned_values)
     except RuntimeError as err:
         print(f"ERROR: {err}", file=sys.stderr)
         return 1

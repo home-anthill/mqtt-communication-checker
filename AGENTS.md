@@ -3,8 +3,10 @@
 ## Project Structure & Module Organization
 
 This is a Poetry-managed Python utility for local MQTT communication checks.
+The CLI is interactive and validates an existing local stack; it does not
+create profiles, devices, sensors, or controllers.
 
-- `src/__main__.py` contains the CLI implementation: preflight checks, MQTT publishing, MongoDB/Redis verification, and controller command checks.
+- `src/__main__.py` contains the CLI implementation: preflight checks, profile and feature selection, MQTT publishing, MongoDB/Redis verification, and controller command checks.
 - `src/__init__.py` marks the package used by Poetry.
 - `check_mqtt_communication.py` is a thin compatibility runner that calls `src.__main__.main()`.
 - `README.md` documents runtime services and environment variables.
@@ -19,21 +21,21 @@ There is no `tests/` directory yet. Add one with automated tests.
 - `poetry run python check_mqtt_communication.py` runs the compatibility entry point.
 - `poetry build` creates distributable package artifacts.
 
-The checker expects Mosquitto, MongoDB, RabbitMQ, Redis, `producer`, `consumer`, and optionally `online-receiver`. Use environment overrides from `README.md`, for example:
+The checker expects Mosquitto, MongoDB, RabbitMQ, Redis, `producer`, `consumer`, and optionally `online-receiver`. It also requires `API_TOKEN_ENCRYPTION_KEY` from the API server environment. Use environment overrides from `README.md`, for example:
 
 ```bash
-MQTT_HOST=localhost MONGO_URI=mongodb://localhost:27017 poetry run mqtt-communication-checker
+API_TOKEN_ENCRYPTION_KEY='<FROM_API_SERVER_ENV_VAR>' MQTT_HOST=localhost MONGO_URI=mongodb://localhost:27017 poetry run mqtt-communication-checker
 ```
 
 ## Coding Style & Naming Conventions
 
-Use Python 3.12-compatible code. Follow PEP 8 with 4-space indentation, `snake_case` functions and variables, and uppercase constants such as `POLL_SECONDS`. Keep helpers small and explicit; prefer the standard library plus existing dependencies over new packages.
+Use Python 3.12-compatible code. Follow PEP 8 with 4-space indentation, `snake_case` functions and variables, and uppercase constants such as `POLL_SECONDS`. Keep helpers small and explicit; prefer the standard library plus existing dependencies over new packages. Existing dependencies include `paho-mqtt`, `pymongo`, `redis`, `cryptography`, `pydantic`, and `questionary`.
 
 No formatter or linter is configured. If adding one, wire it into Poetry and CI in the same change.
 
 ## Testing Guidelines
 
-No automated test framework is currently configured. For new tests, prefer `pytest` under `tests/`, with files named `test_*.py`. Unit-test pure helpers such as signature builders, URI parsing, value matching, and polling behavior with mocks.
+No automated test framework is currently configured. For new tests, prefer `pytest` under `tests/`, with files named `test_*.py`. Unit-test pure helpers such as signature builders, URI parsing, feature value generation, value matching, and polling behavior with mocks.
 
 Run future tests with:
 
