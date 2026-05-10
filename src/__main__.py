@@ -267,11 +267,11 @@ def run_preflight_checks(mongo_client, redis_client):
     return 0
 
 
-def build_mqtt_signed_message(api_token, device_uuid, feature_uuid, payload):
+def build_mqtt_signed_message(api_token, device_uuid, feature_uuid, feature_name, payload):
     timestamp = int(time.time())
     nonce = secrets.token_hex(16)
     payload_json = json.dumps(payload, separators=(",", ":"), sort_keys=False)
-    signed_payload = f"{device_uuid}\n{feature_uuid}\n{timestamp}\n{nonce}\n{payload_json}"
+    signed_payload = f"{device_uuid}\n{feature_uuid}\n{feature_name}\n{timestamp}\n{nonce}\n{payload_json}"
     signature = hmac.new(api_token.encode(), signed_payload.encode(), hashlib.sha256).hexdigest()
     return {
         "deviceUuid": device_uuid,
@@ -542,7 +542,10 @@ def build_feature_choices(api_devices_collection, sensors_collection, controller
 def choose_features(api_devices_collection, sensors_collection, controllers_collection, profile):
     choices = build_feature_choices(api_devices_collection, sensors_collection, controllers_collection, profile)
     if not choices:
-        print("No devices found for the selected profile.")
+        print(
+            "No devices found for the selected profile. Register devices first via the suggested docs/fill-local-db.sh script, "
+            "real ESP32 boards running the firmwares, ore via the API."
+        )
         return []
     if not any(choice.value is not None and not choice.disabled for choice in choices):
         print("No selectable features found for the selected profile. Check sensor/controller registration documents.")
@@ -594,6 +597,7 @@ def publish_online_update(online_sensor):
         document_api_token(online_sensor, "online sensor"),
         online_sensor["deviceUuid"],
         online_sensor["featureUuid"],
+        ONLINE_FEATURE_NAME,
         {},
     )
     online_topic = f"online/{online_sensor['deviceUuid']}/features/{online_sensor['featureUuid']}"
@@ -638,6 +642,7 @@ def run_selected_sensor(sensors_collection, redis_client, selection, value):
         document_api_token(sensor, "sensor"),
         sensor["deviceUuid"],
         sensor["featureUuid"],
+        sensor["featureName"],
         payload,
     )
     topic = f"sensors/{sensor['deviceUuid']}/{sensor['featureName']}"
