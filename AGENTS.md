@@ -12,7 +12,7 @@ create profiles, devices, sensors, or controllers.
 - `README.md` documents runtime services and environment variables.
 - `.github/workflows/build.yml` installs the project with Poetry in CI.
 
-There is no `tests/` directory yet. Add one with automated tests.
+Do not add automated tests or a `tests/` directory to this project.
 
 ## Build, Test, and Development Commands
 
@@ -33,17 +33,15 @@ Use Python 3.12-compatible code. Follow PEP 8 with 4-space indentation, `snake_c
 
 No formatter or linter is configured. If adding one, wire it into Poetry and CI in the same change.
 
-## Testing Guidelines
+## Verification Guidelines
 
-No automated test framework is currently configured. For new tests, prefer `pytest` under `tests/`, with files named `test_*.py`. Unit-test pure helpers such as signature builders, URI parsing, feature value generation, value matching, and polling behavior with mocks.
-
-Run future tests with:
+Do not add automated tests or configure a test framework. For code changes, use lightweight manual or syntax verification such as:
 
 ```bash
-poetry run pytest
+poetry run python -m compileall src
 ```
 
-For manual verification, run the CLI against the local stack and confirm it exits nonzero on failed preflight or verification checks.
+For end-to-end manual verification, run the CLI against the local stack and confirm it exits nonzero on failed preflight or verification checks.
 
 ## Commit & Pull Request Guidelines
 

@@ -11,7 +11,9 @@ import subprocess
 import sys
 import time
 from datetime import datetime, timezone
-from typing import Any
+from decimal import Decimal, ROUND_FLOOR
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 from urllib.error import URLError
 from urllib.parse import urlparse
 from urllib.request import urlopen
@@ -25,14 +27,18 @@ import redis
 from pymongo import MongoClient
 from pymongo.errors import PyMongoError
 
+if TYPE_CHECKING:
+    from paho.mqtt.publish import AuthParameter
+
 
 ONLINE_FEATURE_NAME = "online"
 POLL_SECONDS = 20
 POLL_INTERVAL_SECONDS = 1
 SERVICE_CHECK_TIMEOUT_SECONDS = 3
 API_TOKEN_NONCE_SIZE = 12
+DEFAULT_API_SERVER_ENV_PATH = Path(__file__).resolve().parents[1].parent / "api-server" / ".env"
 API_TOKEN_ENCRYPTION_KEY_MISSING_MESSAGE = """API_TOKEN_ENCRYPTION_KEY is required.
-Rerun the checker with the API server encryption key:
+Set it manually, or create ../api-server/.env with API_TOKEN_ENCRYPTION_KEY:
   API_TOKEN_ENCRYPTION_KEY='KEY_FROM_API_SERVER' poetry run mqtt-communication-checker"""
 
 SENSOR_RANDOM_RANGES = {
@@ -71,6 +77,8 @@ SUPPORTED_CONTROLLER_FEATURES = {
     "tolerance",
 }
 
+SUPPORTED_SPEC_FORMATS = {"bool", "int", "float", "list"}
+
 FEATURE_TYPE_COLORS = {
     "sensor": "fg:ansigreen",
     "controller": "fg:ansiblue",
@@ -103,6 +111,7 @@ class DeviceFeatureChoice(BaseModel):
     feature_name: str
     feature_type: str
     feature_unit: str = ""
+    feature: dict[str, Any] = Field(default_factory=dict)
     backing_document: dict[str, Any]
 
 
@@ -132,8 +141,40 @@ def decode_base64_with_optional_padding(value, urlsafe):
     return decoder((value + padding).encode())
 
 
-def api_token_encryption_key():
+def dotenv_value(path, name):
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return ""
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("export "):
+            stripped = stripped.removeprefix("export ").lstrip()
+
+        key, separator, value = stripped.partition("=")
+        if not separator or key.strip() != name:
+            continue
+
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        return value
+
+    return ""
+
+
+def raw_api_token_encryption_key():
     key = os.environ.get("API_TOKEN_ENCRYPTION_KEY", "")
+    if key:
+        return key
+    return dotenv_value(DEFAULT_API_SERVER_ENV_PATH, "API_TOKEN_ENCRYPTION_KEY")
+
+
+def api_token_encryption_key():
+    key = raw_api_token_encryption_key()
     if not key:
         raise RuntimeError(API_TOKEN_ENCRYPTION_KEY_MISSING_MESSAGE)
 
@@ -314,10 +355,14 @@ def build_mqtt_signed_command(controller, value):
     }
 
 
-def publish_mqtt(topic, message):
+def mqtt_auth() -> "AuthParameter | None":
     username = env("MQTT_USERNAME", "device_pubsub")
-    password = env("MQTT_PASSWORD", "DevicePassword1!")
-    auth = {"username": username, "password": password} if username else None
+    if not username:
+        return None
+    return {"username": username, "password": env("MQTT_PASSWORD", "DevicePassword1!")}
+
+
+def publish_mqtt(topic, message):
     publish.single(
         topic,
         payload=json.dumps(message, separators=(",", ":")),
@@ -325,14 +370,11 @@ def publish_mqtt(topic, message):
         retain=False,
         hostname=env("MQTT_HOST", "localhost"),
         port=int(env("MQTT_PORT", "1883")),
-        auth=auth,
+        auth=mqtt_auth(),
     )
 
 
 def publish_mqtt_json(topic, message):
-    username = env("MQTT_USERNAME", "device_pubsub")
-    password = env("MQTT_PASSWORD", "DevicePassword1!")
-    auth = {"username": username, "password": password} if username else None
     publish.single(
         topic,
         payload=json.dumps(message, separators=(",", ":")),
@@ -340,7 +382,7 @@ def publish_mqtt_json(topic, message):
         retain=False,
         hostname=env("MQTT_HOST", "localhost"),
         port=int(env("MQTT_PORT", "1883")),
-        auth=auth,
+        auth=mqtt_auth(),
     )
 
 
@@ -470,6 +512,10 @@ def find_feature_document(sensors_collection, controllers_collection, profile, d
 def is_supported_feature(feature):
     feature_name = feature.get("name") or ""
     feature_type = feature.get("type") or ""
+    spec_format = (feature.get("spec") or {}).get("format")
+    if feature_type in {"sensor", "controller"} and spec_format in SUPPORTED_SPEC_FORMATS:
+        return True
+
     if feature_type == "sensor":
         return feature_name in SUPPORTED_SENSOR_FEATURES
     if feature_type == "controller":
@@ -499,7 +545,7 @@ def build_feature_choices(api_devices_collection, sensors_collection, controller
         return []
 
     devices = list(api_devices_collection.find({"_id": {"$in": profile.devices}}).sort("name", 1))
-    choices = []
+    choices: list[Any] = []
     for device in devices:
         choices.append(questionary.Separator(f"Device: {device_label(device)}"))
         features = sorted(device.get("features") or [], key=lambda item: item.get("order", 0))
@@ -532,6 +578,7 @@ def build_feature_choices(api_devices_collection, sensors_collection, controller
                         feature_name=feature.get("name") or "",
                         feature_type=feature.get("type") or "",
                         feature_unit=feature.get("unit") or "",
+                        feature=feature,
                         backing_document=backing_document,
                     ),
                 )
@@ -559,8 +606,106 @@ def choose_features(api_devices_collection, sensors_collection, controllers_coll
     return selected or []
 
 
+def decimal_places(value):
+    decimal = Decimal(str(value)).normalize()
+    exponent = decimal.as_tuple().exponent
+    if not isinstance(exponent, int):
+        return 0
+    return max(0, -exponent)
+
+
+def normalize_generated_number(value, spec_format, digits):
+    if spec_format == "int" or digits == 0:
+        return int(value)
+    return round(float(value), digits)
+
+
+def generate_random_stepped_number(minimum, maximum, step, spec_format):
+    minimum_decimal = Decimal(str(minimum))
+    maximum_decimal = Decimal(str(maximum))
+    step_decimal = Decimal(str(step))
+    if step_decimal <= 0:
+        raise RuntimeError(f"spec step must be greater than zero: {step}")
+    if maximum_decimal < minimum_decimal:
+        raise RuntimeError(f"spec max must be greater than or equal to min: min={minimum} max={maximum}")
+
+    steps = int(((maximum_decimal - minimum_decimal) / step_decimal).to_integral_value(rounding=ROUND_FLOOR))
+    value = minimum_decimal + (step_decimal * random.randint(0, steps))
+    digits = max(decimal_places(minimum), decimal_places(maximum), decimal_places(step))
+    return normalize_generated_number(value, spec_format, digits)
+
+
+def effective_sensor_range(feature_name, minimum, maximum):
+    if feature_name not in SENSOR_RANDOM_RANGES:
+        return minimum, maximum
+
+    default_minimum, default_maximum, _digits = SENSOR_RANDOM_RANGES[feature_name]
+    effective_minimum = max(Decimal(str(minimum)), Decimal(str(default_minimum)))
+    effective_maximum = min(Decimal(str(maximum)), Decimal(str(default_maximum)))
+    if effective_maximum < effective_minimum:
+        raise RuntimeError(
+            f"{feature_name} spec range does not overlap supported MQTT range: "
+            f"spec min={minimum} max={maximum}, supported min={default_minimum} max={default_maximum}"
+        )
+    return effective_minimum, effective_maximum
+
+
+def generate_random_ranged_number(spec, feature_name, spec_format):
+    if "min" not in spec or "max" not in spec:
+        raise RuntimeError(f"{feature_name} spec requires min and max")
+
+    minimum, maximum = effective_sensor_range(feature_name, spec["min"], spec["max"])
+    step = spec.get("step")
+    if step is not None:
+        return generate_random_stepped_number(minimum, maximum, step, spec_format)
+
+    if maximum < minimum:
+        raise RuntimeError(f"spec max must be greater than or equal to min: min={minimum} max={maximum}")
+    if spec_format == "int":
+        return random.randint(int(minimum), int(maximum))
+    return random.uniform(float(minimum), float(maximum))
+
+
+def normalize_list_value(value):
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return value
+
+
+def generate_random_spec_value(feature):
+    spec = feature.get("spec") or {}
+    if not spec:
+        return None
+
+    feature_name = feature.get("name") or "unnamed"
+    spec_format = spec.get("format")
+    if spec_format == "bool":
+        return random.choice([0, 1])
+    if spec_format in {"int", "float"}:
+        return generate_random_ranged_number(spec, feature_name, spec_format)
+    if spec_format == "list":
+        values = [
+            item.get("value")
+            for item in spec.get("list") or []
+            if isinstance(item, dict) and "value" in item
+        ]
+        if not values:
+            raise RuntimeError(f"{feature_name} list spec requires at least one value")
+        return normalize_list_value(random.choice(values))
+    raise RuntimeError(f"unsupported spec format for {feature_name}: {spec_format}")
+
+
 def generate_random_feature_value(selection):
     feature_name = selection.feature_name
+    if feature_name == ONLINE_FEATURE_NAME:
+        return None
+
+    value = generate_random_spec_value(selection.feature)
+    if value is not None:
+        if feature_name in SENSOR_RANDOM_RANGES:
+            return float(value)
+        return value
+
     if feature_name in SENSOR_RANDOM_RANGES:
         minimum, maximum, digits = SENSOR_RANDOM_RANGES[feature_name]
         return round(random.uniform(minimum, maximum), digits)

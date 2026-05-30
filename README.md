@@ -31,7 +31,20 @@ Install Python dependencies:
 poetry install
 ```
 
+Run static type checks:
+
+```bash
+poetry run pyrefly check
+```
+
 Run:
+
+```bash
+poetry run mqtt-communication-checker
+```
+
+By default, the checker reads `API_TOKEN_ENCRYPTION_KEY` from `../api-server/.env`.
+Set `API_TOKEN_ENCRYPTION_KEY` in the shell to override that value for a single run:
 
 ```bash
 API_TOKEN_ENCRYPTION_KEY='<FROM_API_SERVER_ENV_VAR>' poetry run mqtt-communication-checker
@@ -39,7 +52,7 @@ API_TOKEN_ENCRYPTION_KEY='<FROM_API_SERVER_ENV_VAR>' poetry run mqtt-communicati
 
 The CLI is interactive:
 
-1. It fails immediately if `API_TOKEN_ENCRYPTION_KEY` is missing or invalid.
+1. It fails immediately if `API_TOKEN_ENCRYPTION_KEY` is missing from the environment and `../api-server/.env`, or if the resolved value is invalid.
 2. It asks which profile to use. Profiles are listed with GitHub email, name/login, owned-device count, and profile id.
 3. It asks which device features to update. Device rows are group headings; check individual features with `Space`, move with `Up`/`Down`, and continue with `Enter`.
 4. It generates a valid random value for each selected feature and publishes commands one by one in the displayed order.
@@ -49,6 +62,7 @@ Feature rows include the feature UUID next to the feature name.
 Useful environment overrides:
 
 ```bash
+API_TOKEN_ENCRYPTION_KEY='<FROM_API_SERVER_ENV_VAR>'
 MQTT_HOST=localhost
 MQTT_PORT=1883
 MQTT_USERNAME=device_pubsub
@@ -84,7 +98,16 @@ Before publishing messages, the script checks that the local stack is up:
 
 Set `REQUIRE_PREFLIGHT=false` to print preflight failures but continue to the interactive prompts.
 
-The script generates random valid values for selected sensor features:
+The script first reads each selected device feature's `spec` object and generates a value that fits it:
+
+- `bool`: numeric MQTT value `0` or `1`
+- `int`/`float`: random value between `min` and `max`, aligned to `step` when present
+- `list`: random item from `list[].value`
+
+For known sensor names, numeric specs are also constrained to the MQTT value ranges supported by the local consumer.
+For example, `light` values are generated from the overlap between the device spec and `0` to `1000` lux.
+
+If an older device feature has no `spec`, the script falls back to built-in defaults for known feature names:
 
 - `temperature`: float in a realistic Celsius range with up to four decimals
 - `humidity`: float percentage from `0` to `100` with one decimal
@@ -125,6 +148,7 @@ GitHub releases [HERE](https://github.com/home-anthill/mqtt-communication-checke
 
 Versions:
 
+- ??/06/2026 - 2.0.0
 - 28/05/2026 - 1.0.0
 
 

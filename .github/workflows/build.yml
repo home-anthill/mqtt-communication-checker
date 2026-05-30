@@ -42,3 +42,5 @@ jobs:
           curl -sSL https://install.python-poetry.org | python3 -
           echo "installing project dependencies"
           poetry install
+      - name: Run Pyrefly
+        run: poetry run pyrefly check
