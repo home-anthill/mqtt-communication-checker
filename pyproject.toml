@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "mqtt-communication-checker"
-version = "1.0.0"
+version = "2.0.0"
 description = "Local MQTT communication checker"
 authors = ["Stefano Cappa"]
 readme = "README.md"
