@@ -16,7 +16,7 @@ python = "^3.12"
 paho-mqtt = "^2.1.0"
 pymongo = "^4.11.1"
 redis = "^5.2.1"
-cryptography = "^48.0.0"
+cryptography = ">=48,<47"
 pydantic = "^2.11.7"
 questionary = "^2.1.0"
 
