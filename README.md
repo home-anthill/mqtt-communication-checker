@@ -92,8 +92,8 @@ Before publishing messages, the script checks that the local stack is up:
 - RabbitMQ: TCP connect to `RABBITMQ_HOST:RABBITMQ_PORT`, or `AMQP_URI` when host/port are not set
 - MongoDB: `ping`
 - Redis: `PING`
-- `producer`: process-name check using `PRODUCER_PROCESS_PATTERN`, or `PRODUCER_HEALTH_URL` if set
-- `consumer`: process-name check using `CONSUMER_PROCESS_PATTERN`, or `CONSUMER_HEALTH_URL` if set
+- `producer`: exact process-name check using `PRODUCER_PROCESS_PATTERN`, or `PRODUCER_HEALTH_URL` if set
+- `consumer`: exact process-name check using `CONSUMER_PROCESS_PATTERN`, or `CONSUMER_HEALTH_URL` if set
 - `online-receiver`: HTTP check using `ONLINE_RECEIVER_HEALTH_URL`
 
 Set `REQUIRE_PREFLIGHT=false` to print preflight failures but continue to the interactive prompts.
@@ -135,6 +135,11 @@ Generated command values include:
 - `mode`: random integer enum
 - `fanSpeed`: random integer enum
 - `tolerance`: random thermostat tolerance
+
+For AC controller models, generated command values are constrained to the firmware-supported ranges before any stored device spec is used:
+
+- `ac-lg`: `setpoint` from `16` to `30`, `fanSpeed` values `1`, `2`, `3`, or `4`
+- `ac-beko`: `setpoint` from `17` to `30`, `fanSpeed` values `1`, `2`, `3`, `4`, or `5`
 
 
 ## :open_book: Documentation :open_book:

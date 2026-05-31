@@ -45,18 +45,27 @@ SENSOR_RANDOM_RANGES = {
     "temperature": (18.0, 30.0, 4),
     "humidity": (0.0, 100.0, 1),
     "light": (0.0, 1000.0, 1),
-    "airpressure": (980.0, 1040.0, 4),
+    "airpressure": (1200, 3000, 4),
 }
 
 INT_FEATURE_RANDOM_VALUES = {
     "motion": [0, 1],
-    "airquality": [0, 1, 2, 3, 4],
+    "airquality": [0, 1, 2, 3],
     "online": [None],
     "on": [0, 1],
-    "setpoint": list(range(17, 31)),
     "mode": list(range(0, 5)),
-    "fanSpeed": list(range(0, 6)),
     "tolerance": list(range(0, 11)),
+}
+
+MODEL_CONTROLLER_RANDOM_VALUES = {
+    "ac-beko": {
+        "setpoint": list(range(17, 31)),
+        "fanSpeed": [0, 1, 2, 4, 5],
+    },
+    "ac-lg": {
+        "setpoint": list(range(16, 31)),
+        "fanSpeed": [10, 2, 0, 5],
+    },
 }
 
 SUPPORTED_SENSOR_FEATURES = {
@@ -250,7 +259,7 @@ def check_http_service(name, url):
 def check_process(name, pattern):
     try:
         result = subprocess.run(
-            ["pgrep", "-fl", pattern],
+            ["pgrep", "-xl", pattern],
             check=False,
             capture_output=True,
             text=True,
@@ -261,8 +270,8 @@ def check_process(name, pattern):
 
     matches = [line for line in result.stdout.splitlines() if line.strip()]
     if result.returncode == 0 and matches:
-        return True, f"OK {name}: process matched '{pattern}'"
-    return False, f"FAIL {name}: no process matched '{pattern}'"
+        return True, f"OK {name}: process name matched '{pattern}'"
+    return False, f"FAIL {name}: no process name matched '{pattern}'"
 
 
 def check_process_or_http(name, process_env, process_default, url_env):
@@ -695,10 +704,18 @@ def generate_random_spec_value(feature):
     raise RuntimeError(f"unsupported spec format for {feature_name}: {spec_format}")
 
 
+def device_model_key(selection):
+    return selection.model.strip().lower()
+
+
 def generate_random_feature_value(selection):
     feature_name = selection.feature_name
     if feature_name == ONLINE_FEATURE_NAME:
         return None
+
+    model_values = MODEL_CONTROLLER_RANDOM_VALUES.get(device_model_key(selection), {})
+    if selection.feature_type == "controller" and feature_name in model_values:
+        return random.choice(model_values[feature_name])
 
     value = generate_random_spec_value(selection.feature)
     if value is not None:
