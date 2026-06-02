@@ -45,7 +45,7 @@ SENSOR_RANDOM_RANGES = {
     "temperature": (18.0, 30.0, 4),
     "humidity": (0.0, 100.0, 1),
     "light": (0.0, 1000.0, 1),
-    "airpressure": (1200, 3000, 4),
+    "airpressure": (300, 1200, 4),
 }
 
 INT_FEATURE_RANDOM_VALUES = {
