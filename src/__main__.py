@@ -615,6 +615,29 @@ def choose_features(api_devices_collection, sensors_collection, controllers_coll
     return selected or []
 
 
+def selectable_features(api_devices_collection, sensors_collection, controllers_collection, profile):
+    choices = build_feature_choices(api_devices_collection, sensors_collection, controllers_collection, profile)
+    return [
+        choice.value
+        for choice in choices
+        if getattr(choice, "value", None) is not None and not getattr(choice, "disabled", None)
+    ]
+
+
+def all_selectable_features(api_devices_collection, sensors_collection, controllers_collection, profiles):
+    selections = []
+    for profile in profiles:
+        profile_selections = selectable_features(
+            api_devices_collection,
+            sensors_collection,
+            controllers_collection,
+            profile,
+        )
+        print(f"Selected {len(profile_selections)} feature(s) for {profile.label}")
+        selections.extend(profile_selections)
+    return selections
+
+
 def decimal_places(value):
     decimal = Decimal(str(value)).normalize()
     exponent = decimal.as_tuple().exponent
@@ -743,6 +766,26 @@ def plan_selected_feature_values(selections):
     ]
 
 
+def plan_all_feature_values(selections):
+    planned_values = []
+    skipped = 0
+    for selection in selections:
+        try:
+            value = generate_random_feature_value(selection)
+        except RuntimeError as err:
+            skipped += 1
+            print(
+                f"SKIP {selection.device_name or selection.device_uuid} "
+                f"{selection.feature_name} ({selection.feature_uuid}): {err}"
+            )
+            continue
+        planned_values.append(PlannedFeatureValue(selection=selection, value=value))
+
+    if skipped:
+        print(f"Skipped {skipped} feature(s) that could not generate a value.")
+    return planned_values
+
+
 def print_planned_feature_values(planned_values):
     print("Values to send:")
     for index, planned in enumerate(planned_values, start=1):
@@ -865,12 +908,17 @@ def run_planned_feature_values(sensors_collection, controllers_collection, redis
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="send every supported feature for every device in every profile without interactive selectors",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv=None):
     try:
-        parse_args(argv)
+        args = parse_args(argv)
         api_token_encryption_key()
 
         mongo = MongoClient(env("MONGO_URI", "mongodb://localhost:27017"), serverSelectionTimeoutMS=3000)
@@ -888,15 +936,36 @@ def main(argv=None):
         if preflight_result:
             return preflight_result
 
-        profile = choose_profile(profiles_collection)
-        if profile is None:
-            return 1
+        if args.all:
+            profiles = list_profiles(profiles_collection)
+            if not profiles:
+                print("No profiles found in API server MongoDB.")
+                return 1
 
-        selections = choose_features(api_devices_collection, sensors_collection, controllers_collection, profile)
-        if not selections:
-            return 1
+            selections = all_selectable_features(
+                api_devices_collection,
+                sensors_collection,
+                controllers_collection,
+                profiles,
+            )
+            if not selections:
+                print("No selectable features found across all profiles. Check sensor/controller registration documents.")
+                return 1
 
-        planned_values = plan_selected_feature_values(selections)
+            planned_values = plan_all_feature_values(selections)
+            if not planned_values:
+                print("No generated values to send.")
+                return 1
+        else:
+            profile = choose_profile(profiles_collection)
+            if profile is None:
+                return 1
+
+            selections = choose_features(api_devices_collection, sensors_collection, controllers_collection, profile)
+            if not selections:
+                return 1
+
+            planned_values = plan_selected_feature_values(selections)
         print_planned_feature_values(planned_values)
 
         return run_planned_feature_values(sensors_collection, controllers_collection, redis_client, planned_values)

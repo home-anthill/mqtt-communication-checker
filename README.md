@@ -43,6 +43,12 @@ Run:
 poetry run mqtt-communication-checker
 ```
 
+Run non-interactively for every supported feature on every device in every profile:
+
+```bash
+poetry run mqtt-communication-checker --all
+```
+
 By default, the checker reads `API_TOKEN_ENCRYPTION_KEY` from `../api-server/.env`.
 Set `API_TOKEN_ENCRYPTION_KEY` in the shell to override that value for a single run:
 
@@ -58,6 +64,8 @@ The CLI is interactive:
 4. It generates a valid random value for each selected feature and publishes commands one by one in the displayed order.
 
 Feature rows include the feature UUID next to the feature name.
+
+Use `--all` to skip the profile and feature selectors. In this mode, the checker sends every selectable sensor and controller feature across all profiles, and skips features whose values cannot be generated.
 
 Useful environment overrides:
 
@@ -120,7 +128,7 @@ For `online`, it publishes the dedicated online status topic and verifies Redis:
 
 - online status topic: `online/{deviceUuid}/features/{featureUuid}`
 
-To publish only the online/power-outage update, select only the `online` feature in the interactive feature list.
+To publish only the online update, select only the `online` feature in the interactive feature list.
 
 If a Mongo verification fails, the script stops immediately. That usually means the MQTT message was accepted by Mosquitto but the producer, RabbitMQ, or consumer hop did not complete.
 
@@ -168,7 +176,7 @@ Versions:
 
 The MIT License (MIT)
 
-Copyright (c) 2021-2026 Stefano Cappa (Ks89)
+Copyright (c) 2026 Stefano Cappa (Ks89)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
