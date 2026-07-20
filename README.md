@@ -162,7 +162,7 @@ GitHub releases [HERE](https://github.com/home-anthill/mqtt-communication-checke
 
 Versions:
 
-- ??/06/2026 - 2.0.0
+- ??/07/2026 - 2.0.0
 - 28/05/2026 - 1.0.0
 
 
