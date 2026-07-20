@@ -57,6 +57,10 @@ INT_FEATURE_RANDOM_VALUES = {
     "tolerance": list(range(0, 11)),
 }
 
+SENSOR_INT_FEATURE_RANDOM_VALUES = {
+    "mode": list(range(-1, 3)),
+}
+
 MODEL_CONTROLLER_RANDOM_VALUES = {
     "ac-beko": {
         "setpoint": list(range(17, 31)),
@@ -75,6 +79,7 @@ SUPPORTED_SENSOR_FEATURES = {
     "motion",
     "airpressure",
     "airquality",
+    "mode",
     ONLINE_FEATURE_NAME,
 }
 
@@ -749,6 +754,8 @@ def generate_random_feature_value(selection):
     if feature_name in SENSOR_RANDOM_RANGES:
         minimum, maximum, digits = SENSOR_RANDOM_RANGES[feature_name]
         return round(random.uniform(minimum, maximum), digits)
+    if selection.feature_type == "sensor" and feature_name in SENSOR_INT_FEATURE_RANDOM_VALUES:
+        return random.choice(SENSOR_INT_FEATURE_RANDOM_VALUES[feature_name])
     if feature_name in INT_FEATURE_RANDOM_VALUES:
         values = INT_FEATURE_RANDOM_VALUES[feature_name]
         return random.choice(values)
