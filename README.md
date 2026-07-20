@@ -123,7 +123,7 @@ If an older device feature has no `spec`, the script falls back to built-in defa
 - `airpressure`: float hPa value with up to four decimals
 - `motion`: `0` or `1`
 - `airquality`: integer enum value from `0` to `4`
-- thermostat sensor `mode`: integer enum from `-1` (cooling fault) to `2` (heating)
+- thermostat sensor `mode`: float enum with admitted values `-1.0`, `0.0`, `1.0`, and `2.0`
 
 For `online`, it publishes the dedicated online status topic and verifies Redis:
 

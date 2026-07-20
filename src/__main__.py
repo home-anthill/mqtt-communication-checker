@@ -57,8 +57,8 @@ INT_FEATURE_RANDOM_VALUES = {
     "tolerance": list(range(0, 11)),
 }
 
-SENSOR_INT_FEATURE_RANDOM_VALUES = {
-    "mode": list(range(-1, 3)),
+SENSOR_FEATURE_RANDOM_VALUES = {
+    "mode": [-1.0, 0.0, 1.0, 2.0],
 }
 
 MODEL_CONTROLLER_RANDOM_VALUES = {
@@ -741,6 +741,9 @@ def generate_random_feature_value(selection):
     if feature_name == ONLINE_FEATURE_NAME:
         return None
 
+    if selection.feature_type == "sensor" and feature_name in SENSOR_FEATURE_RANDOM_VALUES:
+        return random.choice(SENSOR_FEATURE_RANDOM_VALUES[feature_name])
+
     model_values = MODEL_CONTROLLER_RANDOM_VALUES.get(device_model_key(selection), {})
     if selection.feature_type == "controller" and feature_name in model_values:
         return random.choice(model_values[feature_name])
@@ -754,8 +757,6 @@ def generate_random_feature_value(selection):
     if feature_name in SENSOR_RANDOM_RANGES:
         minimum, maximum, digits = SENSOR_RANDOM_RANGES[feature_name]
         return round(random.uniform(minimum, maximum), digits)
-    if selection.feature_type == "sensor" and feature_name in SENSOR_INT_FEATURE_RANDOM_VALUES:
-        return random.choice(SENSOR_INT_FEATURE_RANDOM_VALUES[feature_name])
     if feature_name in INT_FEATURE_RANDOM_VALUES:
         values = INT_FEATURE_RANDOM_VALUES[feature_name]
         return random.choice(values)
