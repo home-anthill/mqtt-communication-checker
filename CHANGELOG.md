@@ -4,6 +4,7 @@
 
 ### Features
 
+- Added `alarm-receiver` preflight, separate `mode` and `mode (error -1)` choices, and alarm publishing for motion and thermostat mode errors.
 - add device feature spec support
 - add --all to send all messages to all profiles
 - add thermostat `mode` sensor feature

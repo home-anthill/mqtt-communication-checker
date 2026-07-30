@@ -21,7 +21,7 @@ Local services must already be running:
 - RabbitMQ
 - `producer`
 - `consumer`
-- `online-receiver` if you want to verify the `online/.../features/...` Redis path
+- `alarm-receiver` if you want to verify online heartbeats or generic alarms
 - Redis for online verification
 - Registered AC and/or thermostat controller documents if you want to verify commands
 
@@ -88,7 +88,7 @@ RABBITMQ_HOST=localhost
 RABBITMQ_PORT=5672
 PRODUCER_PROCESS_PATTERN=producer
 CONSUMER_PROCESS_PATTERN=consumer
-ONLINE_RECEIVER_HEALTH_URL='http://localhost:8088/keepalive'
+ALARM_RECEIVER_HEALTH_URL='http://localhost:8088/keepalive'
 PRODUCER_HEALTH_URL=
 CONSUMER_HEALTH_URL=
 REQUIRE_PREFLIGHT=true
@@ -102,7 +102,7 @@ Before publishing messages, the script checks that the local stack is up:
 - Redis: `PING`
 - `producer`: exact process-name check using `PRODUCER_PROCESS_PATTERN`, or `PRODUCER_HEALTH_URL` if set
 - `consumer`: exact process-name check using `CONSUMER_PROCESS_PATTERN`, or `CONSUMER_HEALTH_URL` if set
-- `online-receiver`: HTTP check using `ONLINE_RECEIVER_HEALTH_URL`
+- `alarm-receiver`: HTTP check using `ALARM_RECEIVER_HEALTH_URL`
 
 Set `REQUIRE_PREFLIGHT=false` to print preflight failures but continue to the interactive prompts.
 
@@ -123,13 +123,30 @@ If an older device feature has no `spec`, the script falls back to built-in defa
 - `airpressure`: float hPa value with up to four decimals
 - `motion`: `0` or `1`
 - `airquality`: integer enum value from `0` to `4`
-- thermostat sensor `mode`: float enum with admitted values `-1.0`, `0.0`, `1.0`, and `2.0`
+- thermostat sensor `mode`: random normal value from `0.0`, `1.0`, and `2.0`
+- thermostat sensor `mode (error -1)`: fixed `-1.0` value that simulates an
+  error
 
 For `online`, it publishes the dedicated online status topic and verifies Redis:
 
 - online status topic: `online/{deviceUuid}/features/{featureUuid}`
 
 To publish only the online update, select only the `online` feature in the interactive feature list.
+
+Alarm-triggering sensor values also publish a second, independently signed
+message with a fresh nonce:
+
+- `motion=1`:
+  `alarms/{deviceUuid}/features/{motionFeatureUuid}/motion`
+- thermostat `mode=-1`:
+  `alarms/{deviceUuid}/features/{modeFeatureUuid}/thermostat-mode-error`
+
+`motion=0` and thermostat modes other than `-1` remain normal sensor telemetry
+and do not produce alarms.
+
+The feature selector shows `mode` and `mode (error -1)` as separate choices.
+The normal choice publishes only a randomly generated normal mode. The error
+choice publishes both mode telemetry and the `thermostat-mode-error` alarm.
 
 If a Mongo verification fails, the script stops immediately. That usually means the MQTT message was accepted by Mosquitto but the producer, RabbitMQ, or consumer hop did not complete.
 

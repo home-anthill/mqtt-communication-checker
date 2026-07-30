@@ -58,7 +58,7 @@ INT_FEATURE_RANDOM_VALUES = {
 }
 
 SENSOR_FEATURE_RANDOM_VALUES = {
-    "mode": [-1.0, 0.0, 1.0, 2.0],
+    "mode": [0.0, 1.0, 2.0],
 }
 
 MODEL_CONTROLLER_RANDOM_VALUES = {
@@ -125,6 +125,8 @@ class DeviceFeatureChoice(BaseModel):
     feature_name: str
     feature_type: str
     feature_unit: str = ""
+    display_name: str = ""
+    fixed_value: float | None = None
     feature: dict[str, Any] = Field(default_factory=dict)
     backing_document: dict[str, Any]
 
@@ -303,7 +305,7 @@ def run_preflight_checks(mongo_client, redis_client):
         check_redis(redis_client),
         check_process_or_http("producer", "PRODUCER_PROCESS_PATTERN", "producer", "PRODUCER_HEALTH_URL"),
         check_process_or_http("consumer", "CONSUMER_PROCESS_PATTERN", "consumer", "CONSUMER_HEALTH_URL"),
-        check_http_service("online-receiver", env("ONLINE_RECEIVER_HEALTH_URL", "http://localhost:8088/keepalive")),
+        check_http_service("alarm-receiver", env("ALARM_RECEIVER_HEALTH_URL", "http://localhost:8088/keepalive")),
     ]
 
     failures = 0
@@ -537,7 +539,7 @@ def is_supported_feature(feature):
     return False
 
 
-def feature_choice_title(feature):
+def feature_choice_title(feature, display_name=None):
     feature_name = feature.get("name") or ""
     feature_type = feature.get("type") or ""
     feature_unit = feature.get("unit") or "-"
@@ -547,7 +549,7 @@ def feature_choice_title(feature):
 
     return [
         ("", "  "),
-        (color, feature_name),
+        (color, display_name or feature_name),
         ("", " | "),
         (color, feature_type),
         ("", f" | {feature_unit} | {feature_uuid}"),
@@ -577,26 +579,35 @@ def build_feature_choices(api_devices_collection, sensors_collection, controller
                 choices.append(questionary.Choice(title=title, value=None, disabled="missing MQTT document"))
                 continue
 
-            choices.append(
-                questionary.Choice(
-                    title=title,
-                    value=DeviceFeatureChoice(
-                        profile_id=profile.id,
-                        device_id=device["_id"],
-                        device_uuid=device.get("uuid") or "",
-                        device_name=device.get("name") or "",
-                        mac=device.get("mac") or "",
-                        model=device.get("model") or "",
-                        manufacturer=device.get("manufacturer") or "",
-                        feature_uuid=feature.get("uuid") or "",
-                        feature_name=feature.get("name") or "",
-                        feature_type=feature.get("type") or "",
-                        feature_unit=feature.get("unit") or "",
-                        feature=feature,
-                        backing_document=backing_document,
-                    ),
-                )
+            selection = DeviceFeatureChoice(
+                profile_id=profile.id,
+                device_id=device["_id"],
+                device_uuid=device.get("uuid") or "",
+                device_name=device.get("name") or "",
+                mac=device.get("mac") or "",
+                model=device.get("model") or "",
+                manufacturer=device.get("manufacturer") or "",
+                feature_uuid=feature.get("uuid") or "",
+                feature_name=feature.get("name") or "",
+                feature_type=feature.get("type") or "",
+                feature_unit=feature.get("unit") or "",
+                feature=feature,
+                backing_document=backing_document,
             )
+            choices.append(questionary.Choice(title=title, value=selection))
+            if selection.feature_type == "sensor" and selection.feature_name == "mode":
+                error_selection = selection.model_copy(
+                    update={
+                        "display_name": "mode (error -1)",
+                        "fixed_value": -1.0,
+                    }
+                )
+                choices.append(
+                    questionary.Choice(
+                        title=feature_choice_title(feature, error_selection.display_name),
+                        value=error_selection,
+                    )
+                )
     return choices
 
 
@@ -738,6 +749,8 @@ def device_model_key(selection):
 
 def generate_random_feature_value(selection):
     feature_name = selection.feature_name
+    if selection.fixed_value is not None:
+        return selection.fixed_value
     if feature_name == ONLINE_FEATURE_NAME:
         return None
 
@@ -767,9 +780,16 @@ def planned_value_text(value):
     return "online heartbeat" if value is None else str(value)
 
 
+def selection_display_name(selection):
+    return selection.display_name or selection.feature_name
+
+
 def plan_selected_feature_values(selections):
     return [
-        PlannedFeatureValue(selection=selection, value=generate_random_feature_value(selection))
+        PlannedFeatureValue(
+            selection=selection,
+            value=generate_random_feature_value(selection),
+        )
         for selection in selections
     ]
 
@@ -800,7 +820,7 @@ def print_planned_feature_values(planned_values):
         selection = planned.selection
         print(
             f"[{index}/{len(planned_values)}] {selection.device_name or selection.device_uuid} | "
-            f"{selection.feature_name} | {selection.feature_type} | {selection.feature_unit or '-'} | "
+            f"{selection_display_name(selection)} | {selection.feature_type} | {selection.feature_unit or '-'} | "
             f"{selection.feature_uuid} | value={planned_value_text(planned.value)}"
         )
 
@@ -817,6 +837,40 @@ def publish_online_update(online_sensor):
     print(f"PUBLISH {online_topic}")
     publish_mqtt(online_topic, online_message)
     return online_topic
+
+
+def alarm_type_for_sensor_value(feature_name, value):
+    if feature_name == "motion" and value == 1:
+        return "motion"
+    if feature_name == "mode" and value == -1:
+        return "thermostat-mode-error"
+    return None
+
+
+def publish_sensor_alarm(sensor, value):
+    alarm_type = alarm_type_for_sensor_value(sensor["featureName"], value)
+    if alarm_type is None:
+        return None
+
+    # Build a second signed envelope so sensor telemetry and its real-time alarm
+    # use different nonces in the shared Redis replay-protection database.
+    alarm_message = build_mqtt_signed_message(
+        document_api_token(sensor, "sensor"),
+        sensor["deviceUuid"],
+        sensor["featureUuid"],
+        sensor["featureName"],
+        {"value": value},
+    )
+    alarm_topic = (
+        f"alarms/{sensor['deviceUuid']}/features/"
+        f"{sensor['featureUuid']}/{alarm_type}"
+    )
+    print(
+        f"PUBLISH {alarm_topic} featureUuid={sensor['featureUuid']} "
+        f"value={value}"
+    )
+    publish_mqtt(alarm_topic, alarm_message)
+    return alarm_topic
 
 
 def set_controller_db_value(collection, controller, expected_value):
@@ -862,12 +916,13 @@ def run_selected_sensor(sensors_collection, redis_client, selection, value):
 
     print(f"PUBLISH {topic} featureUuid={sensor['featureUuid']} value={value}")
     publish_mqtt(topic, message)
+    publish_sensor_alarm(sensor, value)
 
     ok, actual = wait_for_mongo_value(sensors_collection, sensor, value)
     if ok:
-        print(f"OK Mongo {selection.feature_name}: value={actual}")
+        print(f"OK Mongo {selection_display_name(selection)}: value={actual}")
         return 0
-    print(f"FAIL Mongo {selection.feature_name}: expected={value}, actual={actual}")
+    print(f"FAIL Mongo {selection_display_name(selection)}: expected={value}, actual={actual}")
     return 1
 
 
@@ -897,7 +952,7 @@ def run_planned_feature_values(sensors_collection, controllers_collection, redis
         value = planned.value
         print(
             f"[{index}/{len(planned_values)}] Sending {selection.device_name or selection.device_uuid} "
-            f"{selection.feature_name} ({selection.feature_uuid}) value={planned_value_text(value)}"
+            f"{selection_display_name(selection)} ({selection.feature_uuid}) value={planned_value_text(value)}"
         )
         if selection.feature_type == "sensor":
             failures += run_selected_sensor(sensors_collection, redis_client, selection, value)
