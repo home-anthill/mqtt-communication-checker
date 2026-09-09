@@ -14,14 +14,14 @@ mqtt-communication-checker = "src.__main__:main"
 [tool.poetry.dependencies]
 python = "^3.12"
 paho-mqtt = "^2.1.0"
-pymongo = "^4.17.0"
-redis = "^8.0.1"
-cryptography = "^49.0.0"
-pydantic = "^2.13.4"
+pymongo = "^4.18.0"
+redis = "^8.1.0"
+cryptography = "^50.0.1"
+pydantic = "^2.13.5"
 questionary = "^2.1.1"
 
 [tool.poetry.group.dev.dependencies]
-pyrefly = "^1.1.1"
+pyrefly = "^1.2.0"
 
 [tool.pyrefly]
 project-includes = [
