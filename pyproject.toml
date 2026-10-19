@@ -14,7 +14,7 @@ mqtt-communication-checker = "src.__main__:main"
 [tool.poetry.dependencies]
 python = "^3.12"
 paho-mqtt = "^2.1.0"
-pymongo = "4.19.0"
+pymongo = "^4.19.0"
 redis = "^8.1.0"
 cryptography = "==50.0.2"
 pydantic = "==2.14.1"
