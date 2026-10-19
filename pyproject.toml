@@ -14,11 +14,12 @@ mqtt-communication-checker = "src.__main__:main"
 [tool.poetry.dependencies]
 python = "^3.12"
 paho-mqtt = "^2.1.0"
-pymongo = "^4.18.0"
+pymongo = "4.19.0"
 redis = "^8.1.0"
-cryptography = "^50.0.1"
-pydantic = "^2.13.5"
+cryptography = "==50.0.2"
+pydantic = "==2.14.1"
 questionary = "^2.1.1"
+pyrefly = "==1.4.0"
 
 [tool.poetry.group.dev.dependencies]
 pyrefly = "^1.2.0"
