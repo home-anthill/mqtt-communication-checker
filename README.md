@@ -121,6 +121,13 @@ If an older device feature has no `spec`, the script falls back to built-in defa
 - `humidity`: float percentage from `0` to `100` with one decimal
 - `light`: decimal lux value from `0` to `1000` with one decimal
 - `airpressure`: float hPa value with up to four decimals
+- `altitude`: float from `-1000` to `10000` m with one decimal
+- `co2`: whole ppm value from `0` to `40000`, encoded as a JSON float to match the firmware/backend signature format
+- `ph`: float from `0` to `14` with two decimals
+- `iaq`: numeric Bosch IAQ index from `0` to `500`
+- `voc`: BSEC breath VOC equivalent estimate from `0` to `1000` ppm
+- `eco2`: estimated CO2 equivalent from `0` to `40000` ppm, separate from measured `co2`
+- `level`: numeric `0` (below threshold) or `1` (threshold reached)
 - `motion`: `0` or `1`
 - `airquality`: integer enum value from `0` to `4`
 - thermostat sensor `mode`: random normal value from `0.0`, `1.0`, and `2.0`
@@ -138,10 +145,12 @@ message with a fresh nonce:
 
 - `motion=1`:
   `alarms/{deviceUuid}/features/{motionFeatureUuid}/motion`
+- `level=1`:
+  `alarms/{deviceUuid}/features/{levelFeatureUuid}/level`
 - thermostat `mode=-1`:
   `alarms/{deviceUuid}/features/{modeFeatureUuid}/thermostat-mode-error`
 
-`motion=0` and thermostat modes other than `-1` remain normal sensor telemetry
+`motion=0`, `level=0`, and thermostat modes other than `-1` remain normal sensor telemetry
 and do not produce alarms.
 
 The feature selector shows `mode` and `mode (error -1)` as separate choices.

@@ -46,10 +46,17 @@ SENSOR_RANDOM_RANGES = {
     "humidity": (0.0, 100.0, 1),
     "light": (0.0, 1000.0, 1),
     "airpressure": (300, 1200, 4),
+    "altitude": (-1000, 10000, 1),
+    "iaq": (0, 500, 1),
+    "voc": (0, 1000, 3),
+    "eco2": (0, 40000, 0),
+    "co2": (0, 40000, 0),
+    "ph": (0, 14, 2),
 }
 
 INT_FEATURE_RANDOM_VALUES = {
     "motion": [0, 1],
+    "level": [0, 1],
     "airquality": [0, 1, 2, 3],
     "online": [None],
     "on": [0, 1],
@@ -79,6 +86,13 @@ SUPPORTED_SENSOR_FEATURES = {
     "motion",
     "airpressure",
     "airquality",
+    "iaq",
+    "voc",
+    "eco2",
+    "altitude",
+    "co2",
+    "level",
+    "ph",
     "mode",
     ONLINE_FEATURE_NAME,
 }
@@ -842,6 +856,8 @@ def publish_online_update(online_sensor):
 def alarm_type_for_sensor_value(feature_name, value):
     if feature_name == "motion" and value == 1:
         return "motion"
+    if feature_name == "level" and value == 1:
+        return "level"
     if feature_name == "mode" and value == -1:
         return "thermostat-mode-error"
     return None
