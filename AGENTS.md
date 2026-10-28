@@ -52,3 +52,7 @@ Pull requests should include a summary, local commands run, affected environment
 ## Security & Configuration Tips
 
 Do not commit real MQTT passwords, API tokens, MongoDB credentials, or Redis URLs. Keep secrets in environment variables. Defaults in the README are for local development only.
+
+## Feature contract
+
+The checker supports PM readings and gas indexes as floats, including registered `vocIndex`/`noxIndex` mapped to MQTT `voc-index`/`nox-index`. It supports `temperatureStatus` codes 0–5 via `temperature-status`, with separate nonzero alarms, plus motion, water-level, and thermostat mode-error alarms. Keep fallback ranges and spec-driven generation aligned with firmware and backend definitions. The ten networked device firmwares target ESP32-S3 only; the MCP9600 simulator does not register and is not a checker target.

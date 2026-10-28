@@ -42,6 +42,12 @@ Set it manually, or create ../api-server/.env with API_TOKEN_ENCRYPTION_KEY:
   API_TOKEN_ENCRYPTION_KEY='KEY_FROM_API_SERVER' poetry run mqtt-communication-checker"""
 
 SENSOR_RANDOM_RANGES = {
+    "pm1": (0, 6000, 1),
+    "pm25": (0, 6000, 1),
+    "pm4": (0, 6000, 1),
+    "pm10": (0, 6000, 1),
+    "vocIndex": (1, 500, 1),
+    "noxIndex": (1, 500, 1),
     "temperature": (18.0, 30.0, 4),
     "humidity": (0.0, 100.0, 1),
     "light": (0.0, 1000.0, 1),
@@ -80,7 +86,14 @@ MODEL_CONTROLLER_RANDOM_VALUES = {
 }
 
 SUPPORTED_SENSOR_FEATURES = {
+    "pm1",
+    "pm25",
+    "pm4",
+    "pm10",
+    "vocIndex",
+    "noxIndex",
     "temperature",
+    "temperatureStatus",
     "humidity",
     "light",
     "motion",
@@ -542,14 +555,12 @@ def find_feature_document(sensors_collection, controllers_collection, profile, d
 def is_supported_feature(feature):
     feature_name = feature.get("name") or ""
     feature_type = feature.get("type") or ""
-    spec_format = (feature.get("spec") or {}).get("format")
-    if feature_type in {"sensor", "controller"} and spec_format in SUPPORTED_SPEC_FORMATS:
-        return True
-
     if feature_type == "sensor":
+        # A device spec describes values, not producer/consumer support.
         return feature_name in SUPPORTED_SENSOR_FEATURES
     if feature_type == "controller":
-        return feature_name in SUPPORTED_CONTROLLER_FEATURES
+        spec_format = (feature.get("spec") or {}).get("format")
+        return feature_name in SUPPORTED_CONTROLLER_FEATURES or spec_format in SUPPORTED_SPEC_FORMATS
     return False
 
 
@@ -585,7 +596,7 @@ def build_feature_choices(api_devices_collection, sensors_collection, controller
                 choices.append(questionary.Choice(title=title, value=None, disabled="disabled feature"))
                 continue
             if not is_supported_feature(feature):
-                choices.append(questionary.Choice(title=title, value=None, disabled="unsupported feature"))
+                choices.append(questionary.Choice(title=title, value=None, disabled="unsupported MQTT feature"))
                 continue
 
             backing_document = find_feature_document(sensors_collection, controllers_collection, profile, device, feature)
@@ -608,11 +619,19 @@ def build_feature_choices(api_devices_collection, sensors_collection, controller
                 feature=feature,
                 backing_document=backing_document,
             )
-            choices.append(questionary.Choice(title=title, value=selection))
+            if selection.feature_name == "temperatureStatus":
+                selection.display_name = "temperatureStatus (random code 0–5)"
+            elif selection.feature_type == "sensor" and selection.feature_name == "mode":
+                selection.display_name = "mode (random normal value: 0, 1, 2)"
+            elif selection.feature_name != ONLINE_FEATURE_NAME:
+                selection.display_name = f"{selection.feature_name} (random value)"
+            choices.append(questionary.Choice(
+                title=feature_choice_title(feature, selection.display_name), value=selection,
+            ))
             if selection.feature_type == "sensor" and selection.feature_name == "mode":
                 error_selection = selection.model_copy(
                     update={
-                        "display_name": "mode (error -1)",
+                        "display_name": "mode (fixed error value: -1)",
                         "fixed_value": -1.0,
                     }
                 )
@@ -622,6 +641,14 @@ def build_feature_choices(api_devices_collection, sensors_collection, controller
                         value=error_selection,
                     )
                 )
+            if selection.feature_type == "sensor" and selection.feature_name == "temperatureStatus":
+                for code in range(6):
+                    status_selection = selection.model_copy(update={
+                        "display_name": f"{selection.feature_name} (code {code})", "fixed_value": code,
+                    })
+                    choices.append(questionary.Choice(
+                        title=feature_choice_title(feature, status_selection.display_name), value=status_selection,
+                    ))
     return choices
 
 
@@ -651,6 +678,7 @@ def selectable_features(api_devices_collection, sensors_collection, controllers_
         choice.value
         for choice in choices
         if getattr(choice, "value", None) is not None and not getattr(choice, "disabled", None)
+        and not (choice.value.feature_name == "temperatureStatus" and choice.value.fixed_value is not None)
     ]
 
 
@@ -765,6 +793,8 @@ def generate_random_feature_value(selection):
     feature_name = selection.feature_name
     if selection.fixed_value is not None:
         return selection.fixed_value
+    if feature_name == "temperatureStatus":
+        return random.randint(0, 5)
     if feature_name == ONLINE_FEATURE_NAME:
         return None
 
@@ -854,6 +884,8 @@ def publish_online_update(online_sensor):
 
 
 def alarm_type_for_sensor_value(feature_name, value):
+    if feature_name == "temperatureStatus" and value in range(1, 6):
+        return "temperature-status"
     if feature_name == "motion" and value == 1:
         return "motion"
     if feature_name == "level" and value == 1:
@@ -928,7 +960,12 @@ def run_selected_sensor(sensors_collection, redis_client, selection, value):
         sensor["featureName"],
         payload,
     )
-    topic = f"sensors/{sensor['deviceUuid']}/{sensor['featureName']}"
+    topic_name = {
+        "temperatureStatus": "temperature-status",
+        "vocIndex": "voc-index",
+        "noxIndex": "nox-index",
+    }.get(sensor["featureName"], sensor["featureName"])
+    topic = f"sensors/{sensor['deviceUuid']}/{topic_name}"
 
     print(f"PUBLISH {topic} featureUuid={sensor['featureUuid']} value={value}")
     publish_mqtt(topic, message)

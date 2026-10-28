@@ -115,6 +115,12 @@ The script first reads each selected device feature's `spec` object and generate
 For known sensor names, numeric specs are also constrained to the MQTT value ranges supported by the local consumer.
 For example, `light` values are generated from the overlap between the device spec and `0` to `1000` lux.
 
+A sensor spec alone does not imply backend support. Sensor names must also be
+supported by the producer and consumer. PM features `pm1`, `pm25`, `pm4`, `pm10`,
+`vocIndex`, and `noxIndex` are supported as floats. Gas indexes use MQTT topic
+suffixes `voc-index` and `nox-index`, preserving camelCase names in signatures
+and MongoDB. Rebuild and restart producer and consumer to enable these features.
+
 If an older device feature has no `spec`, the script falls back to built-in defaults for known feature names:
 
 - `temperature`: float in a realistic Celsius range with up to four decimals
@@ -127,6 +133,8 @@ If an older device feature has no `spec`, the script falls back to built-in defa
 - `iaq`: numeric Bosch IAQ index from `0` to `500`
 - `voc`: BSEC breath VOC equivalent estimate from `0` to `1000` ppm
 - `eco2`: estimated CO2 equivalent from `0` to `40000` ppm, separate from measured `co2`
+- `pm1`, `pm25`, `pm4`, `pm10`: float from `0` to `6000` µg/m³ with one decimal
+- `vocIndex`, `noxIndex`: float index from `1` to `500` with one decimal
 - `level`: numeric `0` (below threshold) or `1` (threshold reached)
 - `motion`: `0` or `1`
 - `airquality`: integer enum value from `0` to `4`
@@ -153,11 +161,20 @@ message with a fresh nonce:
 `motion=0`, `level=0`, and thermostat modes other than `-1` remain normal sensor telemetry
 and do not produce alarms.
 
-The feature selector shows `mode` and `mode (error -1)` as separate choices.
+The feature selector labels generated values with `(random value)` and uses
+`temperatureStatus (random code 0–5)` for the random status option. The separate
+`temperatureStatus (code N)` options always send the specified code. The `-`
+column means the feature has no measurement unit.
+
+The feature selector shows `mode (random normal value: 0, 1, 2)` and
+`mode (fixed error value: -1)` as separate choices.
 The normal choice publishes only a randomly generated normal mode. The error
 choice publishes both mode telemetry and the `thermostat-mode-error` alarm.
 
-If a Mongo verification fails, the script stops immediately. That usually means the MQTT message was accepted by Mosquitto but the producer, RabbitMQ, or consumer hop did not complete.
+If a Mongo verification fails, the script reports the expected and actual values,
+continues with the remaining features, and exits nonzero with a failure count.
+That usually means the MQTT message was accepted by Mosquitto but the producer,
+RabbitMQ, or consumer hop did not complete.
 
 The script also sends controller commands for selected controller features. It reads existing documents from MongoDB database `controllers`, collection `controllers`, sets each command value in DB, verifies `status.value`, and publishes a signed MQTT command array with one command at a time to:
 
