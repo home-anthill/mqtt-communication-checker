@@ -12,6 +12,7 @@
 - add --all to send all messages to all profiles
 - add thermostat `mode` sensor feature
 - support AC models with different fanSpeed and mode values
+- add Makefile
 
 ### Bugfixes
 
