@@ -33,6 +33,10 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+      - name: Install Make
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y make
       - name: Install poetry and packages
         run: |
           sudo apt-get update -y
@@ -41,6 +45,10 @@ jobs:
           echo "installing poetry"
           curl -sSL https://install.python-poetry.org | python3 -
           echo "installing project dependencies"
-          poetry install
+          make deps
       - name: Run Pyrefly
-        run: poetry run pyrefly check
+        run: make lint
+      - name: Audit dependencies
+        run: make check
+      - name: Build package
+        run: make build

@@ -8,37 +8,38 @@ create profiles, devices, sensors, or controllers.
 
 - `src/__main__.py` contains the CLI implementation: preflight checks, profile and feature selection, MQTT publishing, MongoDB/Redis verification, and controller command checks.
 - `src/__init__.py` marks the package used by Poetry.
-- `check_mqtt_communication.py` is a thin compatibility runner that calls `src.__main__.main()`.
 - `README.md` documents runtime services and environment variables.
-- `.github/workflows/build.yml` installs the project with Poetry in CI.
+- `Makefile` provides dependency installation, type checking, dependency auditing, packaging, and CLI commands through Poetry.
+- `.github/workflows/build.yml` uses the Makefile commands in CI.
 
 Do not add automated tests or a `tests/` directory to this project.
 
 ## Build, Test, and Development Commands
 
-- `poetry install` installs runtime dependencies from `pyproject.toml` and `poetry.lock`.
-- `poetry run mqtt-communication-checker` runs the installed console script.
-- `poetry run python check_mqtt_communication.py` runs the compatibility entry point.
-- `poetry build` creates distributable package artifacts.
+- `make deps` installs dependencies from `pyproject.toml` and `poetry.lock` (requires Poetry and Make).
+- `make lint` runs Pyrefly static type checks.
+- `make check` audits dependencies with pip-audit.
+- `make run` runs the installed console script; use `make run ARGS="--all"` for non-interactive checks.
+- `make build` creates distributable package artifacts and is the default target for `make`.
 
 The checker expects Mosquitto, MongoDB, RabbitMQ, Redis, `producer`, `consumer`, and optionally `alarm-receiver`. It also requires `API_TOKEN_ENCRYPTION_KEY` from the API server environment. Use environment overrides from `README.md`, for example:
 
 ```bash
-API_TOKEN_ENCRYPTION_KEY='<FROM_API_SERVER_ENV_VAR>' MQTT_HOST=localhost MONGO_URI=mongodb://localhost:27017 poetry run mqtt-communication-checker
+API_TOKEN_ENCRYPTION_KEY='<FROM_API_SERVER_ENV_VAR>' MQTT_HOST=localhost MONGO_URI=mongodb://localhost:27017 make run
 ```
 
 ## Coding Style & Naming Conventions
 
 Use Python 3.12-compatible code. Follow PEP 8 with 4-space indentation, `snake_case` functions and variables, and uppercase constants such as `POLL_SECONDS`. Keep helpers small and explicit; prefer the standard library plus existing dependencies over new packages. Existing dependencies include `paho-mqtt`, `pymongo`, `redis`, `cryptography`, `pydantic`, and `questionary`.
 
-No formatter or linter is configured. If adding one, wire it into Poetry and CI in the same change.
+Pyrefly is configured in `pyproject.toml` and runs through `make lint` locally and in CI. No formatter is configured. If adding one, wire it into Poetry and CI in the same change.
 
 ## Verification Guidelines
 
-Do not add automated tests or configure a test framework. For code changes, use lightweight manual or syntax verification such as:
+Do not add automated tests or configure a test framework. For code changes, run:
 
 ```bash
-poetry run python -m compileall src
+make lint
 ```
 
 For end-to-end manual verification, run the CLI against the local stack and confirm it exits nonzero on failed preflight or verification checks.

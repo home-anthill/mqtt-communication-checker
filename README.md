@@ -25,35 +25,49 @@ Local services must already be running:
 - Redis for online verification
 - Registered AC and/or thermostat controller documents if you want to verify commands
 
-Install Python dependencies:
+Install Python dependencies (requires Poetry and Make):
 
 ```bash
-poetry install
+make deps
 ```
 
 Run static type checks:
 
 ```bash
-poetry run pyrefly check
+make lint
+```
+
+This runs Pyrefly using the configuration in `pyproject.toml`.
+
+Audit dependencies for known vulnerabilities:
+
+```bash
+make check
+```
+
+Build distributable packages:
+
+```bash
+make build
 ```
 
 Run:
 
 ```bash
-poetry run mqtt-communication-checker
+make run
 ```
 
 Run non-interactively for every supported feature on every device in every profile:
 
 ```bash
-poetry run mqtt-communication-checker --all
+make run ARGS="--all"
 ```
 
 By default, the checker reads `API_TOKEN_ENCRYPTION_KEY` from `../api-server/.env`.
 Set `API_TOKEN_ENCRYPTION_KEY` in the shell to override that value for a single run:
 
 ```bash
-API_TOKEN_ENCRYPTION_KEY='<FROM_API_SERVER_ENV_VAR>' poetry run mqtt-communication-checker
+API_TOKEN_ENCRYPTION_KEY='<FROM_API_SERVER_ENV_VAR>' make run
 ```
 
 The CLI is interactive:
